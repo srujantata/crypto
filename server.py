@@ -52,17 +52,17 @@ def rate_limit(request: Request, max_per_minute: int = 60):
     _rate_store[ip] = hits + [now]
 
 
-# ── Simulation manager (singleton) ────────────────────────────────────────────
+# ── Simulation manager + Live bot (singletons) ───────────────────────────────
 from simulator import SimulationManager, run_all_replays
+from cloud_bot import CloudLiveBot
 
-manager = SimulationManager()
+manager  = SimulationManager()
+live_bot = CloudLiveBot()
 _ws_clients: Set[WebSocket] = set()
 _ws_lock = asyncio.Lock()
 
 
-async def _broadcast(name: str, state: dict):
-    """Push simulation update to all connected dashboards."""
-    msg = json.dumps({"type": "sim_update", "profile": name, "data": state})
+async def _broadcast_raw(msg: str):
     async with _ws_lock:
         dead = set()
         for ws in _ws_clients:
@@ -71,6 +71,12 @@ async def _broadcast(name: str, state: dict):
             except Exception:
                 dead.add(ws)
         _ws_clients.difference_update(dead)
+
+
+async def _broadcast(name: str, state: dict):
+    """Push simulation update to all connected dashboards."""
+    msg = json.dumps({"type": "sim_update", "profile": name, "data": state})
+    await _broadcast_raw(msg)
 
 
 def _sync_broadcast(name: str, state: dict):
@@ -83,12 +89,26 @@ def _sync_broadcast(name: str, state: dict):
         pass
 
 
+def _live_bot_event(event_type: str, payload: dict):
+    """Called from live bot thread — push to all WebSocket clients."""
+    msg = json.dumps({"type": event_type, **payload})
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            asyncio.run_coroutine_threadsafe(_broadcast_raw(msg), loop)
+    except Exception:
+        pass
+
+
 # ── Lifespan ──────────────────────────────────────────────────────────────────
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     manager.add_listener(_sync_broadcast)
+    live_bot._on_event = _live_bot_event
+    live_bot.start()
     manager.start_all()
     yield
+    live_bot.stop()
     manager.stop_all()
 
 
@@ -107,7 +127,26 @@ app.add_middleware(
 # ── REST endpoints ────────────────────────────────────────────────────────────
 @app.get("/health")
 async def health():
-    return {"status": "ok", "profiles": list(manager.get_states().keys())}
+    return {
+        "status": "ok",
+        "profiles": list(manager.get_states().keys()),
+        "live_bot": live_bot.status(),
+    }
+
+
+@app.get("/live", dependencies=[Depends(verify_token), Depends(rate_limit)])
+async def get_live_status():
+    return live_bot.status()
+
+
+@app.get("/live/trades", dependencies=[Depends(verify_token), Depends(rate_limit)])
+async def get_live_trades():
+    import csv
+    path = os.path.join(os.path.dirname(__file__), "cloud_trades.csv")
+    if not os.path.exists(path):
+        return []
+    with open(path, newline="") as f:
+        return list(csv.DictReader(f))
 
 
 @app.get("/portfolios", dependencies=[Depends(verify_token), Depends(rate_limit)])
