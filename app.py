@@ -21,8 +21,11 @@ logging.basicConfig(
 log = logging.getLogger("app")
 
 import customtkinter as ctk
-import pystray
 from PIL import Image, ImageDraw
+if _sys.platform == "win32":
+    import pystray
+else:
+    pystray = None
 from dotenv import load_dotenv
 
 # Cross-platform sound alert
@@ -273,7 +276,7 @@ class App(ctk.CTk):
         self._running    = False
         self._on_top     = False
         self._symbol_rows: dict = {}
-        self._tray_icon: pystray.Icon | None = None
+        self._tray_icon = None
         self._daily_pnl  = 0.0
 
         # cloud sync
@@ -287,7 +290,8 @@ class App(ctk.CTk):
         self._last_updated: dict = {}
 
         self._build_ui()
-        self._setup_tray()
+        if pystray:
+            self._setup_tray()
         self._poll_queue()
 
         # start local price fetcher immediately (no cloud needed)
@@ -1018,12 +1022,16 @@ class App(ctk.CTk):
         self.after(0, self.destroy)
 
     def on_closing(self):
-        """X button — minimize to tray instead of quitting."""
-        self.withdraw()  # hide window, keep running
-        self._tray_icon.notify(
-            "Bot still running in background.\nRight-click tray icon to quit.",
-            "Crypto Trading Bot"
-        )
+        """X button — minimize to tray on Windows, quit on Mac."""
+        if pystray and self._tray_icon:
+            self.withdraw()
+            self._tray_icon.notify(
+                "Bot still running in background.\nRight-click tray icon to quit.",
+                "Crypto Trading Bot"
+            )
+        else:
+            self._stop()
+            self.destroy()
 
 
 if __name__ == "__main__":
