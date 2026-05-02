@@ -1,0 +1,194 @@
+"""
+Cloud backend — FastAPI + WebSocket + security.
+Deploy to Railway: railway up
+Run locally:  uvicorn server:app --host 0.0.0.0 --port 8000
+"""
+import os
+import json
+import asyncio
+import hashlib
+import hmac
+import time
+from contextlib import asynccontextmanager
+from typing import Set
+
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Depends, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from dotenv import load_dotenv
+
+load_dotenv()
+
+# ── Security config ───────────────────────────────────────────────────────────
+API_SECRET    = os.getenv("BOT_API_SECRET", "change-me-before-deploying")
+ALLOWED_HOSTS = os.getenv("ALLOWED_ORIGINS", "*").split(",")
+MAX_CONNS     = int(os.getenv("MAX_WS_CONNECTIONS", "10"))
+
+_bearer = HTTPBearer()
+
+
+def verify_token(credentials: HTTPAuthorizationCredentials = Depends(_bearer)):
+    token = credentials.credentials
+    expected = hashlib.sha256(API_SECRET.encode()).hexdigest()
+    if not hmac.compare_digest(token, expected):
+        raise HTTPException(status_code=401, detail="Invalid API token")
+    return token
+
+
+def ws_token_valid(token: str) -> bool:
+    expected = hashlib.sha256(API_SECRET.encode()).hexdigest()
+    return hmac.compare_digest(token, expected)
+
+
+# ── Rate limiter (per IP) ─────────────────────────────────────────────────────
+_rate_store: dict = {}
+
+def rate_limit(request: Request, max_per_minute: int = 60):
+    ip  = request.client.host
+    now = time.time()
+    hits = [t for t in _rate_store.get(ip, []) if now - t < 60]
+    if len(hits) >= max_per_minute:
+        raise HTTPException(status_code=429, detail="Rate limit exceeded")
+    _rate_store[ip] = hits + [now]
+
+
+# ── Simulation manager (singleton) ────────────────────────────────────────────
+from simulator import SimulationManager, run_all_replays
+
+manager = SimulationManager()
+_ws_clients: Set[WebSocket] = set()
+_ws_lock = asyncio.Lock()
+
+
+async def _broadcast(name: str, state: dict):
+    """Push simulation update to all connected dashboards."""
+    msg = json.dumps({"type": "sim_update", "profile": name, "data": state})
+    async with _ws_lock:
+        dead = set()
+        for ws in _ws_clients:
+            try:
+                await ws.send_text(msg)
+            except Exception:
+                dead.add(ws)
+        _ws_clients.difference_update(dead)
+
+
+def _sync_broadcast(name: str, state: dict):
+    """Called from simulator thread — schedule async broadcast."""
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            asyncio.run_coroutine_threadsafe(_broadcast(name, state), loop)
+    except Exception:
+        pass
+
+
+# ── Lifespan ──────────────────────────────────────────────────────────────────
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    manager.add_listener(_sync_broadcast)
+    manager.start_all()
+    yield
+    manager.stop_all()
+
+
+# ── App ───────────────────────────────────────────────────────────────────────
+app = FastAPI(title="Crypto Markets API", version="1.0.0", lifespan=lifespan)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=ALLOWED_HOSTS,
+    allow_credentials=True,
+    allow_methods=["GET", "POST"],
+    allow_headers=["Authorization", "Content-Type"],
+)
+
+
+# ── REST endpoints ────────────────────────────────────────────────────────────
+@app.get("/health")
+async def health():
+    return {"status": "ok", "profiles": list(manager.get_states().keys())}
+
+
+@app.get("/portfolios", dependencies=[Depends(verify_token), Depends(rate_limit)])
+async def get_portfolios():
+    return manager.get_states()
+
+
+@app.get("/portfolio/{profile}", dependencies=[Depends(verify_token), Depends(rate_limit)])
+async def get_portfolio(profile: str):
+    states = manager.get_states()
+    if profile not in states:
+        raise HTTPException(status_code=404, detail=f"Profile '{profile}' not found")
+    return states[profile]
+
+
+@app.get("/trades/{profile}", dependencies=[Depends(verify_token), Depends(rate_limit)])
+async def get_trades(profile: str):
+    import csv, os
+    path = os.path.join(os.path.dirname(__file__), f"trades_{profile}.csv")
+    if not os.path.exists(path):
+        return []
+    with open(path, newline="") as f:
+        return list(csv.DictReader(f))
+
+
+@app.post("/replay", dependencies=[Depends(verify_token), Depends(rate_limit)])
+async def run_replay(months: int = 6):
+    """Run all 5 profiles through historical data at full speed."""
+    loop = asyncio.get_event_loop()
+    results = await loop.run_in_executor(None, run_all_replays, months)
+    return results
+
+
+@app.post("/control/{action}", dependencies=[Depends(verify_token), Depends(rate_limit)])
+async def control(action: str):
+    if action == "stop":
+        manager.stop_all()
+        return {"status": "stopped"}
+    elif action == "start":
+        manager.start_all()
+        return {"status": "started"}
+    raise HTTPException(status_code=400, detail="Unknown action")
+
+
+# ── WebSocket endpoint ────────────────────────────────────────────────────────
+@app.websocket("/ws")
+async def websocket_endpoint(ws: WebSocket, token: str = ""):
+    if not ws_token_valid(token):
+        await ws.close(code=4001, reason="Unauthorized")
+        return
+
+    async with _ws_lock:
+        if len(_ws_clients) >= MAX_CONNS:
+            await ws.close(code=4002, reason="Max connections reached")
+            return
+        _ws_clients.add(ws)
+
+    await ws.accept()
+
+    # send current state immediately on connect
+    try:
+        await ws.send_text(json.dumps({
+            "type": "init",
+            "data": manager.get_states()
+        }))
+    except Exception:
+        pass
+
+    try:
+        while True:
+            # keep alive ping every 30s
+            await asyncio.sleep(30)
+            await ws.send_text(json.dumps({"type": "ping"}))
+    except WebSocketDisconnect:
+        pass
+    finally:
+        async with _ws_lock:
+            _ws_clients.discard(ws)
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("server:app", host="0.0.0.0",
+                port=int(os.getenv("PORT", 8000)), reload=False)

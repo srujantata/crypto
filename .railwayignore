@@ -1,0 +1,15 @@
+.env
+venv/
+dist/
+build/
+__pycache__/
+*.pyc
+*.exe
+app.py
+backtest.py
+gpu_monitor.py
+analyze_gpu.py
+lights_off.bat
+lights_on.bat
+trades.csv
+gpu_temps.csv

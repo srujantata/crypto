@@ -1,0 +1,19 @@
+# Never commit secrets or personal data
+.env
+venv/
+dist/
+build/
+__pycache__/
+*.pyc
+*.pyo
+
+# Personal logs/data
+trades*.csv
+gpu_temps.csv
+
+# PyInstaller
+*.spec
+
+# Windows
+Thumbs.db
+desktop.ini
