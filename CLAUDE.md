@@ -7,7 +7,7 @@ A fully automated crypto trading dashboard with cloud deployment. Built in Pytho
 ```
 Railway (24/7 cloud)
 ├── server.py          FastAPI + WebSocket backend
-├── cloud_bot.py       Live Alpaca trading loop (8 symbols)
+├── cloud_bot.py       Live Alpaca trading loop (8 symbols) — reconnects automatically
 ├── simulator.py       5 parallel risk profile simulations
 └── strategy.py        EMA crossover + ADX + RSI + volume filters
 
@@ -76,6 +76,7 @@ CLOUD_TOKEN=REDACTED_TOKEN
 ALLOWED_ORIGINS=*
 ```
 Railway has all these set in its Variables tab.
+Cloud bot also reads: `EMA_FAST`, `EMA_SLOW`, `ADX_MIN`, `RSI_OVERBOUGHT`, `TRAILING_STOP_PCT`, `POLL_SECONDS` from Railway env (all have sensible defaults, change in Variables tab without redeploying).
 
 ## Running Locally (Mac or Windows)
 ```bash
@@ -93,10 +94,28 @@ python backtest.py
 ```
 On Windows the venv path is `venv\Scripts\python.exe`.
 On Mac use `venv/bin/python`.
+The GUI exe (Windows only) is at `dist/TradingBot.exe` — rebuild with:
+```
+pyinstaller --noconfirm --onefile --windowed --name TradingBot --add-data ".env;." app.py
+```
+
+## Live Settings (no restart needed)
+The GUI Settings panel applies all changes immediately via `_live_cfg` dict in `app.py`:
+- Risk per trade, Timeframe, EMA Fast/Slow, Min ADX, RSI Overbought, Trailing Stop %, Poll interval
+- **Kill Switch** button (⏸) pauses new signal execution without stopping the loop or closing positions
+
+## Production Hardening (done 2026-05-02)
+- **cloud_bot.py**: reconnect loop with exponential backoff (30s → 5min cap) — bot never dies silently
+- **server.py**: `asyncio.get_running_loop()`, `ws.accept()` before client set add, rate_store cleanup task
+- **simulator.py**: all duplicated strategy code replaced with `generate_signals()` calls
+- **exchange.py**: `fetch_ohlcv` retries 3× with backoff; `place_order` validates qty > 0
+- **strategy.py**: `generate_signals()` accepts live params — one source of truth for all callers
+- **backtest.py**: tracks and displays max drawdown per symbol
+- `live_trader.py` deleted (broken/dead — superseded by cloud_bot.py)
 
 ## Current State (as of 2026-05-02)
 - Cloud bot running 24/7 on Railway ✅
-- BTC/USD position open — entered @ $76,434, currently +2.24% unrealized ✅
+- BTC/USD position open — entered @ $76,434, currently +2.66% unrealized ✅
 - GPU temp logging running on Windows PC (auto-starts at login) ✅
 - GPU analysis scheduled for 2026-05-03 to decide on Vast.ai rental ✅
 - RGB lights scheduled: off at 10pm, on at 7:30am via Windows Task Scheduler ✅
