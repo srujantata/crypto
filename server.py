@@ -3,14 +3,16 @@ Cloud backend — FastAPI + WebSocket + security.
 Deploy to Railway: railway up
 Run locally:  uvicorn server:app --host 0.0.0.0 --port 8000
 """
-import os
-import json
 import asyncio
+import csv
 import hashlib
 import hmac
+import json
+import logging
+import os
 import time
 from contextlib import asynccontextmanager
-from typing import Set
+from typing import Optional, Set
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -18,6 +20,12 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from dotenv import load_dotenv
 
 load_dotenv()
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(name)s %(levelname)s — %(message)s",
+)
+log = logging.getLogger("server")
 
 # ── Security config ───────────────────────────────────────────────────────────
 API_SECRET    = os.getenv("BOT_API_SECRET", "change-me-before-deploying")
@@ -43,6 +51,7 @@ def ws_token_valid(token: str) -> bool:
 # ── Rate limiter (per IP) ─────────────────────────────────────────────────────
 _rate_store: dict = {}
 
+
 def rate_limit(request: Request, max_per_minute: int = 60):
     ip  = request.client.host
     now = time.time()
@@ -50,6 +59,17 @@ def rate_limit(request: Request, max_per_minute: int = 60):
     if len(hits) >= max_per_minute:
         raise HTTPException(status_code=429, detail="Rate limit exceeded")
     _rate_store[ip] = hits + [now]
+
+
+async def _cleanup_rate_store():
+    """Prune stale IP entries every 5 minutes to prevent unbounded growth."""
+    while True:
+        await asyncio.sleep(300)
+        now = time.time()
+        for ip in list(_rate_store.keys()):
+            _rate_store[ip] = [t for t in _rate_store[ip] if now - t < 60]
+            if not _rate_store[ip]:
+                del _rate_store[ip]
 
 
 # ── Simulation manager + Live bot (singletons) ───────────────────────────────
@@ -60,6 +80,10 @@ manager  = SimulationManager()
 live_bot = CloudLiveBot()
 _ws_clients: Set[WebSocket] = set()
 _ws_lock = asyncio.Lock()
+
+# Stored at startup so background threads can schedule coroutines safely.
+# Using asyncio.get_running_loop() instead of deprecated get_event_loop().
+_event_loop: Optional[asyncio.AbstractEventLoop] = None
 
 
 async def _broadcast_raw(msg: str):
@@ -74,42 +98,41 @@ async def _broadcast_raw(msg: str):
 
 
 async def _broadcast(name: str, state: dict):
-    """Push simulation update to all connected dashboards."""
     msg = json.dumps({"type": "sim_update", "profile": name, "data": state})
     await _broadcast_raw(msg)
 
 
 def _sync_broadcast(name: str, state: dict):
-    """Called from simulator thread — schedule async broadcast."""
-    try:
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            asyncio.run_coroutine_threadsafe(_broadcast(name, state), loop)
-    except Exception:
-        pass
+    """Called from simulator thread — schedule async broadcast on the stored loop."""
+    if _event_loop and _event_loop.is_running():
+        asyncio.run_coroutine_threadsafe(_broadcast(name, state), _event_loop)
 
 
 def _live_bot_event(event_type: str, payload: dict):
-    """Called from live bot thread — push to all WebSocket clients."""
+    """Called from cloud_bot thread — push to all WebSocket clients."""
     msg = json.dumps({"type": event_type, **payload})
-    try:
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            asyncio.run_coroutine_threadsafe(_broadcast_raw(msg), loop)
-    except Exception:
-        pass
+    if _event_loop and _event_loop.is_running():
+        asyncio.run_coroutine_threadsafe(_broadcast_raw(msg), _event_loop)
 
 
 # ── Lifespan ──────────────────────────────────────────────────────────────────
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    global _event_loop
+    _event_loop = asyncio.get_running_loop()
+    asyncio.ensure_future(_cleanup_rate_store())
+
     manager.add_listener(_sync_broadcast)
     live_bot._on_event = _live_bot_event
     live_bot.start()
     manager.start_all()
+
+    log.info("Server started — live bot + simulations running")
     yield
+
     live_bot.stop()
     manager.stop_all()
+    log.info("Server shutting down")
 
 
 # ── App ───────────────────────────────────────────────────────────────────────
@@ -128,7 +151,7 @@ app.add_middleware(
 @app.get("/health")
 async def health():
     return {
-        "status": "ok",
+        "status":   "ok",
         "profiles": list(manager.get_states().keys()),
         "live_bot": live_bot.status(),
     }
@@ -141,7 +164,6 @@ async def get_live_status():
 
 @app.get("/live/trades", dependencies=[Depends(verify_token), Depends(rate_limit)])
 async def get_live_trades():
-    import csv
     path = os.path.join(os.path.dirname(__file__), "cloud_trades.csv")
     if not os.path.exists(path):
         return []
@@ -164,7 +186,6 @@ async def get_portfolio(profile: str):
 
 @app.get("/trades/{profile}", dependencies=[Depends(verify_token), Depends(rate_limit)])
 async def get_trades(profile: str):
-    import csv, os
     path = os.path.join(os.path.dirname(__file__), f"trades_{profile}.csv")
     if not os.path.exists(path):
         return []
@@ -174,8 +195,7 @@ async def get_trades(profile: str):
 
 @app.post("/replay", dependencies=[Depends(verify_token), Depends(rate_limit)])
 async def run_replay(months: int = 6):
-    """Run all 5 profiles through historical data at full speed."""
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     results = await loop.run_in_executor(None, run_all_replays, months)
     return results
 
@@ -198,33 +218,35 @@ async def websocket_endpoint(ws: WebSocket, token: str = ""):
         await ws.close(code=4001, reason="Unauthorized")
         return
 
+    # Accept before adding to set — prevents dead sockets in the client list
+    await ws.accept()
+
     async with _ws_lock:
         if len(_ws_clients) >= MAX_CONNS:
             await ws.close(code=4002, reason="Max connections reached")
             return
         _ws_clients.add(ws)
 
-    await ws.accept()
+    log.info(f"WS client connected (total: {len(_ws_clients)})")
 
-    # send current state immediately on connect
     try:
         await ws.send_text(json.dumps({
             "type": "init",
-            "data": manager.get_states()
+            "data": manager.get_states(),
         }))
     except Exception:
         pass
 
     try:
         while True:
-            # keep alive ping every 30s
             await asyncio.sleep(30)
             await ws.send_text(json.dumps({"type": "ping"}))
-    except WebSocketDisconnect:
+    except (WebSocketDisconnect, Exception):
         pass
     finally:
         async with _ws_lock:
             _ws_clients.discard(ws)
+        log.info(f"WS client disconnected (total: {len(_ws_clients)})")
 
 
 if __name__ == "__main__":
