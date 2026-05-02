@@ -3,16 +3,19 @@ Multi-profile simulation engine.
 Runs 5 risk profiles in parallel, each with $10,000 virtual capital.
 Also supports historical replay for fast backtesting.
 """
+import csv
+import logging
+import os
 import threading
 import time
-import csv
-import os
-import json
-from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from dataclasses import dataclass, field, asdict
+from datetime import datetime
 from typing import Dict, List, Optional
 
 import pandas as pd
+
+log = logging.getLogger("simulator")
 
 # ── Risk profiles ─────────────────────────────────────────────────────────────
 PROFILES = {
@@ -25,6 +28,8 @@ PROFILES = {
 
 SYMBOLS = ["BTC/USD", "ETH/USD", "SOL/USD", "DOGE/USD", "AVAX/USD",
            "LINK/USD", "LTC/USD", "COIN"]
+
+REPLAY_TIMEOUT_SECONDS = 120  # per-profile replay timeout
 
 
 @dataclass
@@ -51,16 +56,16 @@ class SimState:
     profile:     str
     capital:     float
     start_cap:   float
-    positions:   Dict[str, Position]  = field(default_factory=dict)
-    trades:      List[Trade]          = field(default_factory=list)
-    total_pnl:   float                = 0.0
-    win_trades:  int                  = 0
-    loss_trades: int                  = 0
-    last_update: str                  = ""
+    positions:   Dict[str, Position] = field(default_factory=dict)
+    trades:      List[Trade]         = field(default_factory=list)
+    total_pnl:   float               = 0.0
+    win_trades:  int                 = 0
+    loss_trades: int                 = 0
+    last_update: str                 = ""
 
     @property
     def portfolio_value(self) -> float:
-        return self.capital  # positions are closed at market in live sim
+        return self.capital
 
     @property
     def total_return_pct(self) -> float:
@@ -104,7 +109,8 @@ class SimulationEngine:
 
     def start(self):
         self._stop.clear()
-        self._thread = threading.Thread(target=self._loop, daemon=True)
+        self._thread = threading.Thread(target=self._loop, daemon=True,
+                                        name=f"Sim-{self.name}")
         self._thread.start()
 
     def stop(self):
@@ -119,7 +125,7 @@ class SimulationEngine:
 
     def _tick(self):
         from exchange import fetch_ohlcv
-        import ta
+        from strategy import generate_signals
 
         for symbol in SYMBOLS:
             try:
@@ -127,50 +133,39 @@ class SimulationEngine:
                 if df is None or len(df) < 30:
                     continue
 
-                df = df.copy()
-                df["ema_fast"] = ta.trend.ema_indicator(df["close"], window=self.cfg["ema_fast"])
-                df["ema_slow"] = ta.trend.ema_indicator(df["close"], window=self.cfg["ema_slow"])
-                df["rsi"]      = ta.momentum.rsi(df["close"], window=14)
-                df["adx"]      = ta.trend.adx(df["high"], df["low"], df["close"], window=14)
-                df["vol_ma"]   = df["volume"].rolling(20).mean()
-
-                last  = df.iloc[-1]
-                price = float(last["close"])
-                adx   = float(last["adx"])
-                rsi   = float(last["rsi"])
-
-                ema_cross_up   = float(last["ema_fast"]) > float(last["ema_slow"]) and \
-                                 float(df.iloc[-2]["ema_fast"]) <= float(df.iloc[-2]["ema_slow"])
-                ema_cross_down = float(last["ema_fast"]) < float(last["ema_slow"]) and \
-                                 float(df.iloc[-2]["ema_fast"]) >= float(df.iloc[-2]["ema_slow"])
-                high_vol       = float(last["volume"]) > float(last["vol_ma"])
-
+                df     = generate_signals(df,
+                                          ema_fast=self.cfg["ema_fast"],
+                                          ema_slow=self.cfg["ema_slow"],
+                                          adx_min=self.cfg["adx_min"])
+                last   = df.iloc[-1]
+                price  = float(last["close"])
+                signal = int(last["signal"])
                 in_pos = symbol in self.state.positions
 
-                # trailing stop
+                # trailing stop overrides signal
                 if in_pos:
                     pos = self.state.positions[symbol]
                     pos.peak_price = max(pos.peak_price, price)
-                    drop = (pos.peak_price - price) / pos.peak_price
-                    if drop >= self.cfg["stop"]:
-                        self._sell(symbol, price, reason="trailing_stop")
-                        continue
+                    if pos.peak_price > 0:
+                        drop = (pos.peak_price - price) / pos.peak_price
+                        if drop >= self.cfg["stop"]:
+                            self._sell(symbol, price)
+                            continue
 
-                # buy signal
-                if not in_pos and ema_cross_up and adx > self.cfg["adx_min"] \
-                        and rsi < 70 and high_vol:
+                if signal == 1 and not in_pos:
                     self._buy(symbol, price)
+                elif signal == -1 and in_pos:
+                    self._sell(symbol, price)
 
-                # sell signal
-                elif in_pos and (ema_cross_down or rsi > 75):
-                    self._sell(symbol, price, reason="signal")
-
-            except Exception:
-                pass
+            except Exception as e:
+                log.warning(f"[{self.name}] {symbol} tick error: {e}")
 
         self.state.last_update = datetime.now().isoformat()
         if self._on_update:
-            self._on_update(self.name, self.state.to_dict())
+            try:
+                self._on_update(self.name, self.state.to_dict())
+            except Exception as e:
+                log.warning(f"[{self.name}] update callback error: {e}")
 
     def _buy(self, symbol: str, price: float):
         trade_usd = self.state.capital * self.cfg["risk"]
@@ -183,7 +178,7 @@ class SimulationEngine:
         self.state.trades.append(t)
         self._log_trade(t)
 
-    def _sell(self, symbol: str, price: float, reason: str = "signal"):
+    def _sell(self, symbol: str, price: float):
         if symbol not in self.state.positions:
             return
         pos = self.state.positions.pop(symbol)
@@ -245,18 +240,18 @@ class SimulationManager:
         for fn in list(self._listeners):
             try:
                 fn(name, state)
-            except Exception:
-                pass
+            except Exception as e:
+                log.warning(f"Listener error: {e}")
 
 
-# ── Historical replay (speed testing) ────────────────────────────────────────
+# ── Historical replay ─────────────────────────────────────────────────────────
 def replay_profile(profile_name: str, months: int = 6) -> dict:
     """
     Replay last N months of 1h data through a profile at full speed.
-    Returns final stats. Runs in seconds instead of months.
+    Uses generate_signals() — same logic as live trading, no divergence.
     """
-    import ta
     from exchange import fetch_ohlcv
+    from strategy import generate_signals
 
     cfg   = PROFILES[profile_name]
     state = SimState(profile=profile_name, capital=cfg["capital"], start_cap=cfg["capital"])
@@ -269,78 +264,69 @@ def replay_profile(profile_name: str, months: int = 6) -> dict:
             if df is None or len(df) < 50:
                 continue
 
-            df = df.copy()
-            df["ema_fast"] = ta.trend.ema_indicator(df["close"], window=cfg["ema_fast"])
-            df["ema_slow"] = ta.trend.ema_indicator(df["close"], window=cfg["ema_slow"])
-            df["rsi"]      = ta.momentum.rsi(df["close"], window=14)
-            df["adx"]      = ta.trend.adx(df["high"], df["low"], df["close"], window=14)
-            df["vol_ma"]   = df["volume"].rolling(20).mean()
-            df.dropna(inplace=True)
+            df = generate_signals(df,
+                                  ema_fast=cfg["ema_fast"],
+                                  ema_slow=cfg["ema_slow"],
+                                  adx_min=cfg["adx_min"])
+            df.dropna(subset=["signal"], inplace=True)
 
             pos: Optional[Position] = None
 
-            for i in range(1, len(df)):
-                row  = df.iloc[i]
-                prev = df.iloc[i - 1]
+            for i in range(len(df)):
+                row   = df.iloc[i]
                 price = float(row["close"])
+                sig   = int(row["signal"])
 
-                if pos:
+                if pos and pos.peak_price > 0:
                     pos.peak_price = max(pos.peak_price, price)
-                    if (pos.peak_price - price) / pos.peak_price >= cfg["stop"]:
+                    drop = (pos.peak_price - price) / pos.peak_price
+                    if drop >= cfg["stop"]:
                         pnl = (price - pos.entry_price) * pos.qty
-                        state.capital += pos.qty * price
-                        state.total_pnl += pnl
-                        if pnl > 0: state.win_trades += 1
-                        else: state.loss_trades += 1
+                        state.capital    += pos.qty * price
+                        state.total_pnl  += pnl
+                        state.win_trades  += (1 if pnl > 0 else 0)
+                        state.loss_trades += (0 if pnl > 0 else 1)
                         pos = None
                         continue
 
-                ema_up   = float(row["ema_fast"]) > float(row["ema_slow"]) and \
-                           float(prev["ema_fast"]) <= float(prev["ema_slow"])
-                ema_down = float(row["ema_fast"]) < float(row["ema_slow"]) and \
-                           float(prev["ema_fast"]) >= float(prev["ema_slow"])
-                high_vol = float(row["volume"]) > float(row["vol_ma"])
-
-                if not pos and ema_up and float(row["adx"]) > cfg["adx_min"] \
-                        and float(row["rsi"]) < 70 and high_vol:
+                if sig == 1 and not pos:
                     trade_usd = state.capital * cfg["risk"]
                     qty = trade_usd / price
                     if qty > 0.00001 and trade_usd <= state.capital:
                         state.capital -= trade_usd
                         pos = Position(symbol, price, qty, price)
 
-                elif pos and (ema_down or float(row["rsi"]) > 75):
+                elif sig == -1 and pos:
                     pnl = (price - pos.entry_price) * pos.qty
-                    state.capital += pos.qty * price
-                    state.total_pnl += pnl
-                    if pnl > 0: state.win_trades += 1
-                    else: state.loss_trades += 1
+                    state.capital    += pos.qty * price
+                    state.total_pnl  += pnl
+                    state.win_trades  += (1 if pnl > 0 else 0)
+                    state.loss_trades += (0 if pnl > 0 else 1)
                     pos = None
 
-            # close any open at last price
             if pos:
                 last_price = float(df.iloc[-1]["close"])
                 pnl = (last_price - pos.entry_price) * pos.qty
-                state.capital += pos.qty * last_price
+                state.capital   += pos.qty * last_price
                 state.total_pnl += pnl
 
         except Exception as e:
-            pass
+            log.warning(f"replay_profile [{profile_name}] {symbol}: {e}")
 
     return state.to_dict()
 
 
 def run_all_replays(months: int = 6) -> dict:
     """Run all 5 profiles through historical replay and return comparison."""
-    from concurrent.futures import ThreadPoolExecutor
     results = {}
     with ThreadPoolExecutor(max_workers=5) as ex:
-        futures = {ex.submit(replay_profile, name, months): name
-                   for name in PROFILES}
+        futures = {ex.submit(replay_profile, name, months): name for name in PROFILES}
         for f in futures:
             name = futures[f]
             try:
-                results[name] = f.result()
+                results[name] = f.result(timeout=REPLAY_TIMEOUT_SECONDS)
+            except FuturesTimeoutError:
+                results[name] = {"error": f"Timed out after {REPLAY_TIMEOUT_SECONDS}s"}
             except Exception as e:
                 results[name] = {"error": str(e)}
     return results

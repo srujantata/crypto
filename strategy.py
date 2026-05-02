@@ -15,34 +15,43 @@ def apply_indicators(df: pd.DataFrame, ema_fast: int, ema_slow: int, rsi_period:
 MIN_ROWS = 30  # minimum candles needed for ADX + EMA to be meaningful
 
 
-def generate_signals(df: pd.DataFrame) -> pd.DataFrame:
+def generate_signals(df: pd.DataFrame,
+                     ema_fast: int = None, ema_slow: int = None,
+                     rsi_period: int = None, rsi_overbought: int = None,
+                     adx_min: int = None) -> pd.DataFrame:
     """
     Rules:
       BUY  (1):  EMA fast crosses above EMA slow
-                 AND ADX > 25 (trending market)
-                 AND RSI < 70 (not overbought)
+                 AND ADX > adx_min (trending market)
+                 AND RSI < rsi_overbought (not overbought)
                  AND volume > 20-period average (real breakout)
       SELL (-1): EMA fast crosses below EMA slow
-                 OR RSI > 75 (momentum exhaustion)
+                 OR RSI > rsi_overbought+5 (momentum exhaustion)
+    All params fall back to config defaults when not supplied.
     """
     from config import EMA_FAST, EMA_SLOW, RSI_PERIOD, RSI_OVERBOUGHT
+    ema_fast       = ema_fast       if ema_fast       is not None else EMA_FAST
+    ema_slow       = ema_slow       if ema_slow       is not None else EMA_SLOW
+    rsi_period     = rsi_period     if rsi_period     is not None else RSI_PERIOD
+    rsi_overbought = rsi_overbought if rsi_overbought is not None else RSI_OVERBOUGHT
+    adx_min        = adx_min        if adx_min        is not None else 25
 
     if len(df) < MIN_ROWS:
         df["signal"] = 0
         return df
 
-    df = apply_indicators(df, EMA_FAST, EMA_SLOW, RSI_PERIOD)
+    df = apply_indicators(df, ema_fast, ema_slow, rsi_period)
 
     ema_cross_up   = (df["ema_fast"] > df["ema_slow"]) & (df["ema_fast"].shift(1) <= df["ema_slow"].shift(1))
     ema_cross_down = (df["ema_fast"] < df["ema_slow"]) & (df["ema_fast"].shift(1) >= df["ema_slow"].shift(1))
 
-    trending       = df["adx"] > 25
-    not_overbought = df["rsi"] < RSI_OVERBOUGHT
+    trending       = df["adx"] > adx_min
+    not_overbought = df["rsi"] < rsi_overbought
     high_volume    = df["volume"] > df["vol_ma"]
 
     df["signal"] = 0
     df.loc[ema_cross_up   & trending & not_overbought & high_volume, "signal"] = 1
-    df.loc[ema_cross_down | (df["rsi"] > 75),                        "signal"] = -1
+    df.loc[ema_cross_down | (df["rsi"] > rsi_overbought + 5),        "signal"] = -1
 
     return df
 
