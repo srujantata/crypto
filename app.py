@@ -22,14 +22,27 @@ log = logging.getLogger("app")
 
 import customtkinter as ctk
 import pystray
-import winsound
 from PIL import Image, ImageDraw
 from dotenv import load_dotenv
+
+# Cross-platform sound alert
+import sys as _sys
+import subprocess as _subprocess
+def _beep(freq: int = 1000):
+    if _sys.platform == "win32":
+        import winsound
+        winsound.Beep(freq, 300)
+    else:
+        # macOS: use afplay with a system sound (freq ignored)
+        sound = "/System/Library/Sounds/Ping.aiff" if freq >= 1000 else "/System/Library/Sounds/Basso.aiff"
+        _subprocess.Popen(["afplay", sound], stdout=_subprocess.DEVNULL, stderr=_subprocess.DEVNULL)
+
 # Try multiple paths to find .env regardless of working directory
+_HERE = os.path.dirname(os.path.abspath(__file__))
 for _env_path in [
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"),
+    os.path.join(_HERE, ".env"),
     os.path.join(os.path.dirname(os.path.abspath(os.sys.argv[0])), ".env"),
-    "C:/Users/tatas/trading-bot/.env",
+    os.path.expanduser("~/trading-bot/.env"),
 ]:
     if os.path.exists(_env_path):
         load_dotenv(_env_path, override=True)
@@ -751,7 +764,7 @@ class App(ctk.CTk):
                     # sound alert
                     freq = 1200 if action == "BUY" else 600
                     threading.Thread(
-                        target=lambda f=freq: winsound.Beep(f, 300),
+                        target=lambda f=freq: _beep(f),
                         daemon=True
                     ).start()
 
@@ -824,10 +837,14 @@ class App(ctk.CTk):
 
     def _open_cloud_trades(self):
         """Open cloud trades CSV if it exists, else show message."""
-        import subprocess
-        path = "C:/Users/tatas/trading-bot/cloud_trades.csv"
+        path = os.path.join(_HERE, "cloud_trades.csv")
         if os.path.exists(path):
-            os.startfile(path)
+            if _sys.platform == "win32":
+                os.startfile(path)
+            elif _sys.platform == "darwin":
+                _subprocess.Popen(["open", path])
+            else:
+                _subprocess.Popen(["xdg-open", path])
         else:
             self._append_log("No cloud trades yet — bot is watching for signals.", "yellow")
 
@@ -918,7 +935,7 @@ class App(ctk.CTk):
             })
 
             # persist risk + timeframe to .env so they survive restarts
-            env_path = "C:/Users/tatas/trading-bot/.env"
+            env_path = os.path.join(_HERE, ".env")
             try:
                 with open(env_path, "r") as f:
                     content = f.read()
