@@ -1,7 +1,9 @@
 import logging
 import time
+from datetime import datetime
 
 import pandas as pd
+import pytz
 import yfinance as yf
 from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import MarketOrderRequest
@@ -21,6 +23,18 @@ _FETCH_BACKOFF = 2  # seconds, doubles each retry
 
 def is_crypto(symbol: str) -> bool:
     return "/" in symbol
+
+
+_ET = pytz.timezone("America/New_York")
+
+def is_market_open() -> bool:
+    """True when US equities market is open (9:30–16:00 ET, Mon–Fri)."""
+    now = datetime.now(_ET)
+    if now.weekday() >= 5:          # Saturday=5, Sunday=6
+        return False
+    open_  = now.replace(hour=9,  minute=30, second=0, microsecond=0)
+    close_ = now.replace(hour=16, minute=0,  second=0, microsecond=0)
+    return open_ <= now <= close_
 
 
 def to_yf_ticker(symbol: str) -> str:
@@ -93,12 +107,15 @@ def place_order(client: TradingClient, side: str, symbol: str, qty: float):
     if qty <= 0:
         raise ValueError(f"place_order: qty must be positive, got {qty}")
     alpaca_sym = to_alpaca_symbol(symbol)
+    # Stocks: DAY orders only valid during market hours.
+    # Crypto: GTC because exchange is 24/7.
+    tif = TimeInForce.GTC if is_crypto(symbol) else TimeInForce.DAY
     order = MarketOrderRequest(
         symbol=alpaca_sym,
         qty=round(qty, 6),
         side=OrderSide.BUY if side == "buy" else OrderSide.SELL,
-        time_in_force=TimeInForce.GTC,
+        time_in_force=tif,
     )
     result = client.submit_order(order)
-    log.info(f"Order submitted: {side.upper()} {qty:.6f} {alpaca_sym} → id={result.id}")
+    log.info(f"Order submitted: {side.upper()} {qty:.6f} {alpaca_sym} (TIF={tif.value}) → id={result.id}")
     return result
