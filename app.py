@@ -133,10 +133,15 @@ def _log_trade(symbol, action, price, qty, pnl=None):
 
 # ── bot logic ─────────────────────────────────────────────────────────────────
 def _trade_symbol(symbol: str, state: dict, client, bal: dict):
-    from exchange import fetch_ohlcv, get_position_qty, place_order
+    from exchange import fetch_ohlcv, get_position_qty, place_order, is_crypto, is_market_open
     from strategy import generate_signals, get_higher_tf_trend
 
     if _live_cfg["kill_switch"]:
+        return
+
+    # Skip equities outside NYSE/NASDAQ hours
+    if not is_crypto(symbol) and not is_market_open():
+        _post("log", msg=f"{symbol} skipped — market closed", color="gray")
         return
 
     timeframe      = _live_cfg["timeframe"]
@@ -176,10 +181,13 @@ def _trade_symbol(symbol: str, state: dict, client, bal: dict):
         elif htf == "bull":
             _post("log", msg=f"{symbol} 1h trend confirmed bullish", color="cyan")
 
+    min_qty   = 0.00001 if is_crypto(symbol) else 0.001
+    precision = 1e5     if is_crypto(symbol) else 1e3
+
     if signal == 1 and not state["in_position"]:
         trade_usd = bal["cash"] * risk
         qty = trade_usd / price
-        if qty > 0.00001:
+        if qty > min_qty:
             place_order(client, "buy", symbol, qty)
             state["in_position"] = True
             state["entry"]       = price
@@ -189,8 +197,8 @@ def _trade_symbol(symbol: str, state: dict, client, bal: dict):
             _log_trade(symbol, "BUY", price, qty)
 
     elif signal == -1 and state["in_position"]:
-        actual_qty = math.floor(get_position_qty(client, symbol) * 1e5) / 1e5
-        if actual_qty > 0.00001:
+        actual_qty = math.floor(get_position_qty(client, symbol) * precision) / precision
+        if actual_qty > min_qty:
             place_order(client, "sell", symbol, actual_qty)
             pnl = (price - state["entry"]) * actual_qty
             color = "green" if pnl >= 0 else "red"

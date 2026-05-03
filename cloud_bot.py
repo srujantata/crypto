@@ -29,10 +29,10 @@ class CloudLiveBot:
     Railway Variables tab changes take effect on the next reconnect.
     """
 
-    SYMBOLS = [
-        "BTC/USD", "ETH/USD", "SOL/USD", "DOGE/USD",
-        "AVAX/USD", "LINK/USD", "LTC/USD", "COIN",
-    ]
+    # Populated from config at class load time so Railway Variables changes
+    # require a redeploy (symbols aren't hot-reloaded, params are).
+    from config import SYMBOLS as _cfg_symbols
+    SYMBOLS = list(_cfg_symbols)
 
     def __init__(self, on_event: Optional[Callable] = None):
         self._on_event  = on_event or (lambda t, p: None)
@@ -178,6 +178,15 @@ class CloudLiveBot:
                  risk, ema_fast, ema_slow, timeframe,
                  trail_pct, adx_min, rsi_ob):
 
+        from exchange import is_market_open, is_crypto
+        # Skip equity symbols outside NYSE/NASDAQ trading hours
+        if not is_crypto(symbol) and not is_market_open():
+            self._emit("bot_log", {
+                "msg":   f"{symbol} skipped — market closed",
+                "color": "gray",
+            })
+            return
+
         df = fetch_ohlcv(limit=150, symbol=symbol, timeframe=timeframe)
         if df is None or len(df) < 30:
             return
@@ -227,7 +236,8 @@ class CloudLiveBot:
         if signal == 1 and not state["in_position"]:
             trade_usd = bal["cash"] * risk
             qty = trade_usd / price
-            if qty > 0.00001:
+            min_qty = 0.00001 if is_crypto(symbol) else 0.001
+            if qty > min_qty:
                 place_order(self._client, "buy", symbol, qty)
                 with self._lock:
                     self._states[symbol].update({"in_position": True, "entry": price, "peak": price})
@@ -244,8 +254,10 @@ class CloudLiveBot:
 
         # SELL
         elif signal == -1 and state["in_position"]:
-            actual_qty = math.floor(get_position_qty(self._client, symbol) * 1e5) / 1e5
-            if actual_qty > 0.00001:
+            min_qty = 0.00001 if is_crypto(symbol) else 0.001
+            precision = 1e5 if is_crypto(symbol) else 1e3
+            actual_qty = math.floor(get_position_qty(self._client, symbol) * precision) / precision
+            if actual_qty > min_qty:
                 place_order(self._client, "sell", symbol, actual_qty)
                 pnl = (price - state["entry"]) * actual_qty
                 self._log_trade(symbol, "SELL", price, actual_qty, pnl)

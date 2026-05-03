@@ -13,3 +13,4 @@ aiohttp>=3.9
 customtkinter>=5.2
 pillow>=10.0
 pystray>=0.19
+pytz>=2024.1
