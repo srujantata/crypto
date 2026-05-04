@@ -134,7 +134,6 @@ app.add_middleware(
 async def health():
     return {
         "status":   "ok",
-        "profiles": list(manager.get_states().keys()),
         "live_bot": live_bot.status(),
     }
 
@@ -151,46 +150,6 @@ async def get_live_trades():
         return []
     with open(path, newline="") as f:
         return list(csv.DictReader(f))
-
-
-@app.get("/portfolios", dependencies=[Depends(verify_token), Depends(rate_limit)])
-async def get_portfolios():
-    return manager.get_states()
-
-
-@app.get("/portfolio/{profile}", dependencies=[Depends(verify_token), Depends(rate_limit)])
-async def get_portfolio(profile: str):
-    states = manager.get_states()
-    if profile not in states:
-        raise HTTPException(status_code=404, detail=f"Profile '{profile}' not found")
-    return states[profile]
-
-
-@app.get("/trades/{profile}", dependencies=[Depends(verify_token), Depends(rate_limit)])
-async def get_trades(profile: str):
-    path = os.path.join(os.path.dirname(__file__), f"trades_{profile}.csv")
-    if not os.path.exists(path):
-        return []
-    with open(path, newline="") as f:
-        return list(csv.DictReader(f))
-
-
-@app.post("/replay", dependencies=[Depends(verify_token), Depends(rate_limit)])
-async def run_replay(months: int = 6):
-    loop = asyncio.get_running_loop()
-    results = await loop.run_in_executor(None, run_all_replays, months)
-    return results
-
-
-@app.post("/control/{action}", dependencies=[Depends(verify_token), Depends(rate_limit)])
-async def control(action: str):
-    if action == "stop":
-        manager.stop_all()
-        return {"status": "stopped"}
-    elif action == "start":
-        manager.start_all()
-        return {"status": "started"}
-    raise HTTPException(status_code=400, detail="Unknown action")
 
 
 # ── WebSocket endpoint ────────────────────────────────────────────────────────
@@ -214,7 +173,7 @@ async def websocket_endpoint(ws: WebSocket, token: str = ""):
     try:
         await ws.send_text(json.dumps({
             "type": "init",
-            "data": manager.get_states(),
+            "data": live_bot.status(),
         }))
     except Exception:
         pass
