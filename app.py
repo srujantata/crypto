@@ -324,7 +324,6 @@ class App(ctk.CTk):
         self._cloud_url    = os.getenv("CLOUD_WS_URL", "")
         self._cloud_token  = os.getenv("CLOUD_TOKEN", "")
         self._cloud_thread: threading.Thread | None = None
-        self._cloud_rows:   dict = {}
         self._ws_status    = "disconnected"
 
         self._entry_prices: dict = {}
@@ -452,8 +451,6 @@ class App(ctk.CTk):
         )
         tabs.pack(fill="both", expand=True, padx=0, pady=0)
         tab_local = tabs.add("  live bot  ")
-        tab_cloud = tabs.add("  cloud sims  ")
-        self._build_cloud_tab(tab_cloud)
 
         # ── Portfolio strip ───────────────────────────────────────────────────
         port = ctk.CTkFrame(tab_local, fg_color=BG_CARD,
@@ -581,121 +578,6 @@ class App(ctk.CTk):
         ]:
             self._log_box._textbox.tag_config(tag, foreground=color)
 
-    # ── cloud tab ─────────────────────────────────────────────────────────────
-    def _build_cloud_tab(self, parent):
-        s = self._scale
-
-        def F(size, bold=False):
-            return (FONT_UI, int(size * s), "bold") if bold else (FONT_UI, int(size * s))
-
-        PROFILE_COLORS = {
-            "conservative": CYAN,
-            "moderate":     GREEN,
-            "aggressive":   ACCENT,
-            "scalper":      YELLOW,
-            "swing":        PURPLE,
-        }
-        PROFILES_ORDER = ["conservative", "moderate", "aggressive", "scalper", "swing"]
-
-        # connection bar
-        conn = ctk.CTkFrame(parent, fg_color=BG_CARD,
-                             corner_radius=6, border_width=1, border_color=BORDER_MED)
-        conn.pack(fill="x", padx=int(16 * s), pady=(int(12 * s), 4))
-        ctk.CTkLabel(conn, text="ws", font=F(10, bold=True),
-                     text_color=TEXT_SEC).pack(side="left", padx=12, pady=8)
-        self._lbl_ws_url = ctk.CTkLabel(
-            conn,
-            text=self._cloud_url or "not configured — set CLOUD_WS_URL in .env",
-            font=F(10), text_color=TEXT_SEC,
-        )
-        self._lbl_ws_url.pack(side="left")
-        ctk.CTkButton(conn, text="connect", width=int(80 * s), height=int(26 * s),
-                       fg_color=BG_BASE, hover_color="#1a1a1a",
-                       border_width=1, border_color=BORDER_MED,
-                       font=F(10), text_color=TEXT_PRI,
-                       corner_radius=4, command=self._connect_cloud
-                       ).pack(side="right", padx=8, pady=5)
-        self._lbl_ws_status = ctk.CTkLabel(conn, text="● disconnected",
-                                            font=F(10), text_color=RED)
-        self._lbl_ws_status.pack(side="right", padx=8)
-
-        # replay bar
-        replay_bar = ctk.CTkFrame(parent, fg_color="transparent")
-        replay_bar.pack(fill="x", padx=int(16 * s), pady=(0, 8))
-        ctk.CTkButton(replay_bar, text="▸  run 6-month replay  (all profiles)",
-                       font=F(11), height=int(30 * s),
-                       fg_color=BG_CARD, hover_color="#1a1a1a",
-                       border_width=1, border_color=BORDER_MED,
-                       text_color=TEXT_PRI, corner_radius=4,
-                       command=self._run_replay).pack(side="left")
-        self._lbl_replay = ctk.CTkLabel(replay_bar, text="",
-                                         font=F(10), text_color=TEXT_SEC)
-        self._lbl_replay.pack(side="left", padx=12)
-
-        # profile cards
-        cards = ctk.CTkFrame(parent, fg_color="transparent")
-        cards.pack(fill="x", padx=int(16 * s), pady=4)
-        for ci in range(len(PROFILES_ORDER)):
-            cards.columnconfigure(ci, weight=1)
-
-        self._cloud_rows = {}
-        for ci, name in enumerate(PROFILES_ORDER):
-            color = PROFILE_COLORS[name]
-            card  = ctk.CTkFrame(cards, fg_color=BG_CARD,
-                                  corner_radius=6, border_width=1, border_color=BORDER_MED)
-            card.grid(row=0, column=ci, padx=5, pady=2, sticky="nsew")
-            card.columnconfigure(0, weight=1)
-
-            # accent top bar
-            ctk.CTkFrame(card, fg_color=color, height=2, corner_radius=0
-                          ).grid(row=0, column=0, sticky="ew")
-
-            ctk.CTkLabel(card, text=name, font=F(9, bold=True),
-                         text_color=color).grid(row=1, column=0, pady=(8, 0), padx=12, sticky="w")
-
-            lbl_ret = ctk.CTkLabel(card, text="—",
-                                    font=(FONT_MONO, int(22 * s), "bold"),
-                                    text_color=TEXT_PRI)
-            lbl_ret.grid(row=2, column=0, pady=(2, 0), padx=12, sticky="w")
-
-            lbl_trades = ctk.CTkLabel(card, text="0 trades",
-                                       font=F(9), text_color=TEXT_SEC)
-            lbl_trades.grid(row=3, column=0, padx=12, sticky="w")
-
-            lbl_wr = ctk.CTkLabel(card, text="win rate  —",
-                                   font=F(9), text_color=TEXT_SEC)
-            lbl_wr.grid(row=4, column=0, padx=12, pady=(0, 8), sticky="w")
-
-            # mini return bar
-            bar_bg = ctk.CTkFrame(card, fg_color=BG_BASE, height=3, corner_radius=2)
-            bar_bg.grid(row=5, column=0, sticky="ew", padx=10, pady=(0, 8))
-            bar_fill = ctk.CTkFrame(bar_bg, fg_color=color, height=3, corner_radius=2, width=0)
-            bar_fill.place(x=0, y=0, relheight=1.0)
-
-            self._cloud_rows[name] = {
-                "return": lbl_ret, "trades": lbl_trades,
-                "winrate": lbl_wr, "bar": bar_fill, "bar_bg": bar_bg,
-            }
-
-        # cloud activity log
-        log_wrap = ctk.CTkFrame(parent, fg_color=BG_CARD,
-                                corner_radius=6, border_width=1, border_color=BORDER_MED)
-        log_wrap.pack(fill="both", expand=True,
-                      padx=int(16 * s), pady=(8, int(14 * s)))
-        ctk.CTkLabel(log_wrap, text="cloud activity",
-                     font=(FONT_UI, int(9 * s), "bold"),
-                     text_color=TEXT_SEC).pack(anchor="w", padx=12, pady=(8, 0))
-        ctk.CTkFrame(log_wrap, fg_color=BORDER, height=1, corner_radius=0
-                     ).pack(fill="x", pady=(4, 0))
-        self._cloud_log = ctk.CTkTextbox(
-            log_wrap, font=(FONT_MONO, int(11 * s)),
-            fg_color=BG_BASE, text_color=TEXT_SEC,
-            state="disabled", wrap="word",
-        )
-        self._cloud_log.pack(fill="both", expand=True, padx=0, pady=0)
-        for tag, c in [("green", GREEN), ("red", RED), ("cyan", CYAN),
-                        ("yellow", YELLOW), ("white", TEXT_PRI)]:
-            self._cloud_log._textbox.tag_config(tag, foreground=c)
 
     # ── stat widget ───────────────────────────────────────────────────────────
     def _stat(self, parent, label, value, col):
@@ -709,40 +591,10 @@ class App(ctk.CTk):
         lbl.pack(anchor="w")
         return lbl
 
-    # ── cloud card update ─────────────────────────────────────────────────────
-    def _update_cloud_card(self, name: str, data: dict):
-        row = self._cloud_rows.get(name)
-        if not row:
-            return
-        ret = data.get("return_pct", 0)
-        col = GREEN if ret >= 0 else RED
-        row["return"].configure(text=f"{ret:+.2f}%", text_color=col)
-        row["trades"].configure(text=f"{data.get('total_trades', 0)} trades")
-        row["winrate"].configure(text=f"win rate  {data.get('win_rate', 0):.1f}%")
-
-        # return bar fill (cap at 100%, min 0)
-        pct = max(0.0, min(abs(ret) / 20.0, 1.0))   # 20% = full bar
-        bg = row["bar_bg"]
-        bg.update_idletasks()
-        w = bg.winfo_width()
-        row["bar"].configure(fg_color=col, width=max(1, int(w * pct)))
-
-        for t in data.get("recent_trades", [])[-3:]:
-            ts  = t.get("timestamp", "")[:19]
-            sym = t.get("symbol", "")
-            act = t.get("action", "")
-            pnl = float(t.get("pnl", 0))
-            c   = "green" if act == "BUY" or pnl >= 0 else "red"
-            msg = f"[{ts}] [{name[:4]}] {act} {sym}  pnl ${pnl:+.2f}\n"
-            self._cloud_log.configure(state="normal")
-            self._cloud_log._textbox.insert("end", msg, c)
-            self._cloud_log._textbox.see("end")
-            self._cloud_log.configure(state="disabled")
 
     # ── WebSocket cloud connection ─────────────────────────────────────────────
     def _connect_cloud(self):
         if not self._cloud_url or not self._cloud_token:
-            self._lbl_ws_status.configure(text="● no config", text_color=YELLOW)
             return
         if self._cloud_thread and self._cloud_thread.is_alive():
             return
@@ -754,33 +606,20 @@ class App(ctk.CTk):
             url = f"{self._cloud_url}?token={self._cloud_token}"
             while True:
                 try:
-                    self.after(0, lambda: self._lbl_ws_status.configure(
-                        text="● connecting…", text_color=YELLOW))
                     async with websockets.connect(url, ping_interval=20) as ws:
-                        self.after(0, lambda: self._lbl_ws_status.configure(
-                            text="● live", text_color=GREEN))
                         async for raw in ws:
                             msg = json.loads(raw)
                             t   = msg.get("type", "")
-                            if t == "init":
-                                for name, data in msg["data"].items():
-                                    self.after(0, self._update_cloud_card, name, data)
-                            elif t == "sim_update":
-                                self.after(0, self._update_cloud_card, msg["profile"], msg["data"])
-                            elif t == "bot_tick":
+                            if t == "bot_tick":
                                 self.after(0, self._on_cloud_tick, msg)
-                            elif t == "bot_balance":
+                            elif t in ("bot_balance", "bot_connected"):
                                 self.after(0, self._on_cloud_balance, msg)
                             elif t == "bot_trade":
                                 self.after(0, self._on_cloud_trade, msg)
-                            elif t == "bot_connected":
-                                self.after(0, self._on_cloud_balance, msg)
                             elif t == "bot_log":
                                 self.after(0, self._append_log,
                                            msg.get("msg", ""), msg.get("color", "white"))
                 except Exception:
-                    self.after(0, lambda: self._lbl_ws_status.configure(
-                        text="● reconnecting…", text_color=YELLOW))
                     await asyncio.sleep(5)
         asyncio.run(_run())
 
@@ -808,20 +647,6 @@ class App(ctk.CTk):
                 "msg": f"cloud {action} {sym} @ ${price:,.4f}  pnl ${pnl:+.2f}",
                 "color": color})
 
-    def _run_replay(self):
-        self._lbl_replay.configure(text="running…", text_color=YELLOW)
-        def _do():
-            from simulator import run_all_replays
-            results = run_all_replays(months=6)
-            def _show():
-                best = max(results, key=lambda k: results[k].get("return_pct", -999))
-                self._lbl_replay.configure(
-                    text=f"done  ·  best: {best} ({results[best].get('return_pct',0):+.2f}%)",
-                    text_color=GREEN)
-                for name, data in results.items():
-                    self._update_cloud_card(name, data)
-            self.after(0, _show)
-        threading.Thread(target=_do, daemon=True).start()
 
     # ── queue consumer ────────────────────────────────────────────────────────
     def _poll_queue(self):

@@ -72,17 +72,13 @@ async def _cleanup_rate_store():
                 del _rate_store[ip]
 
 
-# ── Simulation manager + Live bot (singletons) ───────────────────────────────
-from simulator import SimulationManager, run_all_replays
+# ── Live bot (singleton) ──────────────────────────────────────────────────────
 from cloud_bot import CloudLiveBot
 
-manager  = SimulationManager()
-live_bot = CloudLiveBot()
+live_bot    = CloudLiveBot()
 _ws_clients: Set[WebSocket] = set()
-_ws_lock = asyncio.Lock()
+_ws_lock    = asyncio.Lock()
 
-# Stored at startup so background threads can schedule coroutines safely.
-# Using asyncio.get_running_loop() instead of deprecated get_event_loop().
 _event_loop: Optional[asyncio.AbstractEventLoop] = None
 
 
@@ -95,17 +91,6 @@ async def _broadcast_raw(msg: str):
             except Exception:
                 dead.add(ws)
         _ws_clients.difference_update(dead)
-
-
-async def _broadcast(name: str, state: dict):
-    msg = json.dumps({"type": "sim_update", "profile": name, "data": state})
-    await _broadcast_raw(msg)
-
-
-def _sync_broadcast(name: str, state: dict):
-    """Called from simulator thread — schedule async broadcast on the stored loop."""
-    if _event_loop and _event_loop.is_running():
-        asyncio.run_coroutine_threadsafe(_broadcast(name, state), _event_loop)
 
 
 def _live_bot_event(event_type: str, payload: dict):
@@ -122,16 +107,13 @@ async def lifespan(app: FastAPI):
     _event_loop = asyncio.get_running_loop()
     asyncio.ensure_future(_cleanup_rate_store())
 
-    manager.add_listener(_sync_broadcast)
     live_bot._on_event = _live_bot_event
     live_bot.start()
-    manager.start_all()
 
-    log.info("Server started — live bot + simulations running")
+    log.info("Server started — live bot running")
     yield
 
     live_bot.stop()
-    manager.stop_all()
     log.info("Server shutting down")
 
 
