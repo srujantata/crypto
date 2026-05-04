@@ -152,6 +152,9 @@ def _trade_symbol(symbol: str, state: dict, client, bal: dict):
     rsi_overbought = _live_cfg["rsi_overbought"]
     trailing_stop  = _live_cfg["trailing_stop"]
 
+    from config import ATR_TRAIL_MULT
+    import pandas as _pd
+
     df = fetch_ohlcv(limit=150, symbol=symbol, timeframe=timeframe)
     if df is None or len(df) < 2:
         return
@@ -164,14 +167,24 @@ def _trade_symbol(symbol: str, state: dict, client, bal: dict):
     rsi    = float(last["rsi"])
     ema_f  = float(last["ema_fast"])
     adx    = float(last["adx"])
+    atr    = float(last["atr"]) if "atr" in df.columns and not _pd.isna(last["atr"]) else 0.0
     signal = int(last["signal"])
 
-    if state["in_position"]:
+    # ATR-adaptive trailing stop
+    if state["in_position"] and state["peak"] > 0:
         state["peak"] = max(state["peak"], price)
+        atr_entry = state.get("atr_entry", 0.0)
+        if atr_entry > 0:
+            stop_dist      = atr_entry * ATR_TRAIL_MULT
+            drop_threshold = stop_dist / state["peak"]
+        else:
+            drop_threshold = trailing_stop  # fallback to fixed pct
         drop = (state["peak"] - price) / state["peak"]
-        if drop >= trailing_stop:
+        if drop >= drop_threshold:
             signal = -1
-            _post("log", msg=f"{symbol} TRAILING STOP — {drop*100:.1f}% from peak ${state['peak']:,.4f}", color="orange")
+            _post("log", msg=f"{symbol} TRAILING STOP — {drop*100:.1f}% "
+                             f"(threshold {drop_threshold*100:.1f}%) from peak ${state['peak']:,.4f}",
+                  color="orange")
 
     if signal == 1 and not state["in_position"]:
         htf = get_higher_tf_trend(symbol, ema_fast, ema_slow)
@@ -192,6 +205,7 @@ def _trade_symbol(symbol: str, state: dict, client, bal: dict):
             state["in_position"] = True
             state["entry"]       = price
             state["peak"]        = price
+            state["atr_entry"]   = atr   # store ATR at entry for adaptive stop
             _post("log", msg=f"BUY  {symbol}  {qty:.5f} @ ${price:,.4f}  ADX={adx:.1f}  (${trade_usd:,.2f})", color="green")
             _post("trade", symbol=symbol, action="BUY", price=price, pnl=0)
             _log_trade(symbol, "BUY", price, qty)

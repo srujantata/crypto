@@ -12,6 +12,8 @@ import time
 from datetime import datetime
 from typing import Callable, Optional
 
+import pandas as pd
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(name)s %(levelname)s — %(message)s",
@@ -96,16 +98,17 @@ class CloudLiveBot:
         """
         from exchange import get_client, get_balance, fetch_ohlcv, get_position_qty, place_order
         from strategy import generate_signals, get_higher_tf_trend
-        from config import EMA_FAST, EMA_SLOW, TIMEFRAME
+        from config import EMA_FAST, EMA_SLOW, TIMEFRAME, ATR_TRAIL_MULT
 
-        risk    = float(os.getenv("RISK_PER_TRADE",     "0.05"))
-        ema_f   = int(  os.getenv("EMA_FAST",            str(EMA_FAST)))
-        ema_s   = int(  os.getenv("EMA_SLOW",            str(EMA_SLOW)))
-        tf      =       os.getenv("TIMEFRAME",            TIMEFRAME)
-        adx_min = int(  os.getenv("ADX_MIN",             "25"))
-        rsi_ob  = int(  os.getenv("RSI_OVERBOUGHT",      "70"))
-        trail   = float(os.getenv("TRAILING_STOP_PCT",   "0.025"))
-        poll    = int(  os.getenv("POLL_SECONDS",        "60"))
+        risk        = float(os.getenv("RISK_PER_TRADE",     "0.05"))
+        ema_f       = int(  os.getenv("EMA_FAST",            str(EMA_FAST)))
+        ema_s       = int(  os.getenv("EMA_SLOW",            str(EMA_SLOW)))
+        tf          =       os.getenv("TIMEFRAME",            TIMEFRAME)
+        adx_min     = int(  os.getenv("ADX_MIN",             "20"))
+        rsi_ob      = int(  os.getenv("RSI_OVERBOUGHT",      "70"))
+        trail_pct   = float(os.getenv("TRAILING_STOP_PCT",   "0.025"))   # fallback if ATR missing
+        trail_mult  = float(os.getenv("ATR_TRAIL_MULT",      str(ATR_TRAIL_MULT)))
+        poll        = int(  os.getenv("POLL_SECONDS",        "60"))
 
         self._client = get_client()
         bal = get_balance(self._client)
@@ -115,7 +118,8 @@ class CloudLiveBot:
             "portfolio": bal["portfolio_value"],
             "mode":      os.getenv("MODE", "paper").upper(),
         })
-        log.info(f"Connected — ${bal['cash']:,.2f} cash | tf={tf} risk={risk*100:.0f}% ADX>{adx_min}")
+        log.info(f"Connected — ${bal['cash']:,.2f} cash | tf={tf} risk={risk*100:.0f}% "
+                 f"ADX>{adx_min} ATR-trail×{trail_mult}")
         self._sync_positions(get_position_qty)
 
         while not self._stop.is_set():
@@ -131,7 +135,7 @@ class CloudLiveBot:
                             symbol, bal,
                             fetch_ohlcv, generate_signals, get_higher_tf_trend,
                             get_position_qty, place_order,
-                            risk, ema_f, ema_s, tf, trail, adx_min, rsi_ob,
+                            risk, ema_f, ema_s, tf, trail_pct, trail_mult, adx_min, rsi_ob,
                         )
                     except Exception as e:
                         log.warning(f"{symbol}: {e}")
@@ -176,7 +180,7 @@ class CloudLiveBot:
                  fetch_ohlcv, generate_signals, get_higher_tf_trend,
                  get_position_qty, place_order,
                  risk, ema_fast, ema_slow, timeframe,
-                 trail_pct, adx_min, rsi_ob):
+                 trail_pct, trail_mult, adx_min, rsi_ob):
 
         from exchange import is_market_open, is_crypto
         # Skip equity symbols outside NYSE/NASDAQ trading hours
@@ -198,6 +202,7 @@ class CloudLiveBot:
         price  = float(last["close"])
         rsi    = float(last["rsi"])
         adx    = float(last["adx"])
+        atr    = float(last["atr"]) if "atr" in df.columns and not pd.isna(last["atr"]) else 0.0
         signal = int(last["signal"])
 
         with self._lock:
@@ -212,16 +217,25 @@ class CloudLiveBot:
             "in_position": state["in_position"],
         })
 
-        # trailing stop — guard against zero/negative peak
+        # ATR-adaptive trailing stop
+        # Uses ATR × multiplier when available; falls back to fixed trail_pct
         if state["in_position"] and state["peak"] > 0:
             new_peak = max(state["peak"], price)
-            drop = (new_peak - price) / new_peak
             with self._lock:
                 self._states[symbol]["peak"] = new_peak
-            if drop >= trail_pct:
+            # adaptive stop distance: ATR-based if ATR is valid, else fixed pct
+            atr_at_entry = state.get("atr_entry", 0.0)
+            if atr_at_entry > 0:
+                stop_dist = atr_at_entry * trail_mult
+                drop_threshold = stop_dist / new_peak
+            else:
+                drop_threshold = trail_pct  # fallback to fixed pct
+            drop = (new_peak - price) / new_peak
+            if drop >= drop_threshold:
                 signal = -1
                 self._emit("bot_log", {
-                    "msg":   f"{symbol} TRAILING STOP — dropped {drop*100:.1f}% from peak",
+                    "msg":   f"{symbol} TRAILING STOP — dropped {drop*100:.1f}% "
+                             f"(threshold {drop_threshold*100:.1f}%) from peak",
                     "color": "orange",
                 })
 
@@ -240,7 +254,12 @@ class CloudLiveBot:
             if qty > min_qty:
                 place_order(self._client, "buy", symbol, qty)
                 with self._lock:
-                    self._states[symbol].update({"in_position": True, "entry": price, "peak": price})
+                    self._states[symbol].update({
+                        "in_position": True,
+                        "entry":       price,
+                        "peak":        price,
+                        "atr_entry":   atr,   # store ATR at entry for adaptive stop
+                    })
                 self._log_trade(symbol, "BUY", price, qty)
                 self._emit("bot_trade", {
                     "symbol":    symbol,
