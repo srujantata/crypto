@@ -39,7 +39,7 @@ def run():
     health_data = None
     try:
         health_data = _get_json("/health", auth=False)
-        print(f"  {PASS} Cloud server: Online ({len(health_data.get('profiles', []))} profiles running)")
+        print(f"  {PASS} Cloud server: Online")
         passed += 1
     except Exception as e:
         print(f"  {FAIL} Cloud server: UNREACHABLE — {e}")
@@ -72,17 +72,7 @@ def run():
             print(f"  {WARN} Cloud trades: {e}")
             passed += 1
 
-        # 4 — simulation profiles
-        total += 1
-        try:
-            portfolios = _get_json("/portfolios")
-            best = max(portfolios.items(), key=lambda x: x[1].get("return_pct", -999))
-            print(f"  {PASS} Simulations: {len(portfolios)} running | Best: {best[0]} ({best[1].get('return_pct', 0):+.2f}%)")
-            passed += 1
-        except Exception as e:
-            print(f"  {FAIL} Simulations: {e}")
-
-    # 5 — local .env config (always check regardless of cloud)
+    # 4 — local .env config (always check regardless of cloud)
     total += 1
     required = ["ALPACA_API_KEY", "ALPACA_SECRET", "CLOUD_WS_URL", "CLOUD_TOKEN"]
     missing  = [k for k in required if not os.getenv(k)]
