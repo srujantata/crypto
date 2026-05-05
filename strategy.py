@@ -115,18 +115,18 @@ def generate_signals(df: pd.DataFrame,
     )
 
     # ── SELL conditions ───────────────────────────────────────────────────────
+    # price_below_slow removed — triggered on single-candle dips causing whipsaw
     ema_cross_down  = (
         (df["ema_fast"] < df["ema_slow"]) &
         (df["ema_fast"].shift(1) >= df["ema_slow"].shift(1))
     )
-    price_below_slow = df["close"] < df["ema_slow"]             # close below slow EMA
     rsi_exhausted    = df["rsi"] > rsi_overbought + 5
     trend_dying      = (df["adx"] < adx_fade) & (df["macd_hist"] < 0)  # ADX fading + MACD gone
 
     # ── Assign signals ────────────────────────────────────────────────────────
     df["signal"] = 0
-    df.loc[buy_crossover | buy_pullback,                                       "signal"] = 1
-    df.loc[ema_cross_down | price_below_slow | rsi_exhausted | trend_dying,   "signal"] = -1
+    df.loc[buy_crossover | buy_pullback,              "signal"] = 1
+    df.loc[ema_cross_down | rsi_exhausted | trend_dying, "signal"] = -1
 
     # BUY takes priority over SELL on the same candle (avoids crossover conflict)
     df.loc[buy_crossover | buy_pullback, "signal"] = 1

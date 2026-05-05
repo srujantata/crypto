@@ -96,17 +96,18 @@ class CloudLiveBot:
         All params re-read from env so Railway Variables changes take effect
         without redeploying.
         """
-        from exchange import get_client, get_balance, fetch_ohlcv, get_position_qty, place_order
+        from exchange import get_client, get_balance, fetch_ohlcv, get_position_qty, place_order, get_symbol_timeframe
         from strategy import generate_signals, get_higher_tf_trend
-        from config import EMA_FAST, EMA_SLOW, TIMEFRAME, ATR_TRAIL_MULT
+        from config import EMA_FAST, EMA_SLOW, TIMEFRAME, ATR_TRAIL_MULT, STOCK_ADX_MIN
 
         risk        = float(os.getenv("RISK_PER_TRADE",     "0.05"))
         ema_f       = int(  os.getenv("EMA_FAST",            str(EMA_FAST)))
         ema_s       = int(  os.getenv("EMA_SLOW",            str(EMA_SLOW)))
         tf          =       os.getenv("TIMEFRAME",            TIMEFRAME)
         adx_min     = int(  os.getenv("ADX_MIN",             "20"))
+        stock_adx   = int(  os.getenv("STOCK_ADX_MIN",       str(STOCK_ADX_MIN)))
         rsi_ob      = int(  os.getenv("RSI_OVERBOUGHT",      "70"))
-        trail_pct   = float(os.getenv("TRAILING_STOP_PCT",   "0.025"))   # fallback if ATR missing
+        trail_pct   = float(os.getenv("TRAILING_STOP_PCT",   "0.025"))
         trail_mult  = float(os.getenv("ATR_TRAIL_MULT",      str(ATR_TRAIL_MULT)))
         poll        = int(  os.getenv("POLL_SECONDS",        "60"))
 
@@ -135,7 +136,8 @@ class CloudLiveBot:
                             symbol, bal,
                             fetch_ohlcv, generate_signals, get_higher_tf_trend,
                             get_position_qty, place_order,
-                            risk, ema_f, ema_s, tf, trail_pct, trail_mult, adx_min, rsi_ob,
+                            get_symbol_timeframe,
+                            risk, ema_f, ema_s, tf, trail_pct, trail_mult, adx_min, stock_adx, rsi_ob,
                         )
                     except Exception as e:
                         log.warning(f"{symbol}: {e}")
@@ -179,8 +181,9 @@ class CloudLiveBot:
     def _process(self, symbol, bal,
                  fetch_ohlcv, generate_signals, get_higher_tf_trend,
                  get_position_qty, place_order,
+                 get_symbol_timeframe,
                  risk, ema_fast, ema_slow, timeframe,
-                 trail_pct, trail_mult, adx_min, rsi_ob):
+                 trail_pct, trail_mult, adx_min, stock_adx, rsi_ob):
 
         from exchange import is_market_open, is_crypto
         # Skip equity symbols outside NYSE/NASDAQ trading hours
@@ -191,13 +194,17 @@ class CloudLiveBot:
             })
             return
 
-        df = fetch_ohlcv(limit=150, symbol=symbol, timeframe=timeframe)
+        # Use slower timeframe + higher ADX for stocks to avoid whipsaw
+        sym_tf  = get_symbol_timeframe(symbol, timeframe)
+        sym_adx = adx_min if is_crypto(symbol) else stock_adx
+
+        df = fetch_ohlcv(limit=150, symbol=symbol, timeframe=sym_tf)
         if df is None or len(df) < 30:
             return
 
         df     = generate_signals(df,
                                   ema_fast=ema_fast, ema_slow=ema_slow,
-                                  adx_min=adx_min, rsi_overbought=rsi_ob)
+                                  adx_min=sym_adx, rsi_overbought=rsi_ob)
         last   = df.iloc[-1]
         price  = float(last["close"])
         rsi    = float(last["rsi"])

@@ -25,6 +25,19 @@ def is_crypto(symbol: str) -> bool:
     return "/" in symbol
 
 
+_TF_ORDER = ["1m", "5m", "15m", "30m", "1h", "4h", "1d"]
+
+def get_symbol_timeframe(symbol: str, base_tf: str) -> str:
+    """Stocks use a slower timeframe to cut whipsaw — always at least STOCK_TIMEFRAME.
+    Crypto keeps base_tf unchanged."""
+    if is_crypto(symbol):
+        return base_tf
+    from config import STOCK_TIMEFRAME
+    base_i  = _TF_ORDER.index(base_tf)        if base_tf        in _TF_ORDER else 2
+    stock_i = _TF_ORDER.index(STOCK_TIMEFRAME) if STOCK_TIMEFRAME in _TF_ORDER else 4
+    return _TF_ORDER[max(base_i, stock_i)]
+
+
 _ET = pytz.timezone("America/New_York")
 
 def is_market_open() -> bool:

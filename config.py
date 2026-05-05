@@ -29,9 +29,9 @@ STOCK_SYMBOLS = [
 SYMBOLS = CRYPTO_SYMBOLS + STOCK_SYMBOLS
 
 TIMEFRAME      = os.getenv("TIMEFRAME", "15m")
-RISK_PER_TRADE = float(os.getenv("RISK_PER_TRADE", "0.05"))  # raised to 5%
+RISK_PER_TRADE = float(os.getenv("RISK_PER_TRADE", "0.05"))
 
-# Strategy parameters
+# Strategy parameters — crypto (15m default)
 EMA_FAST        = 9
 EMA_SLOW        = 21
 RSI_PERIOD      = 14
@@ -40,5 +40,9 @@ RSI_OVERSOLD    = 40    # RSI floor for BUY — rejects failed oversold bounces
 VOL_SURGE_MULT  = 1.2   # volume must be 1.2× average for crossover entries
 ADX_FADE_EXIT   = 18    # sell when ADX drops below this AND MACD turns negative
 ATR_TRAIL_MULT  = 1.8   # trailing stop = ATR × this multiplier (adaptive to volatility)
+
+# Stock-specific overrides — slower timeframe + higher trend filter
+STOCK_TIMEFRAME = "1h"  # stocks use 1h candles — reduces whipsaw vs 15m
+STOCK_ADX_MIN   = 28    # stocks need stronger trend confirmation before entry
 
 BACKTEST_LIMIT = 150

@@ -144,6 +144,10 @@ def _trade_symbol(symbol: str, state: dict, client, bal: dict):
         _post("log", msg=f"{symbol} skipped — market closed", color="gray")
         return
 
+    from exchange import get_symbol_timeframe
+    from config import ATR_TRAIL_MULT, STOCK_ADX_MIN
+    import pandas as _pd
+
     timeframe      = _live_cfg["timeframe"]
     risk           = _live_cfg["risk"]
     ema_fast       = _live_cfg["ema_fast"]
@@ -152,14 +156,15 @@ def _trade_symbol(symbol: str, state: dict, client, bal: dict):
     rsi_overbought = _live_cfg["rsi_overbought"]
     trailing_stop  = _live_cfg["trailing_stop"]
 
-    from config import ATR_TRAIL_MULT
-    import pandas as _pd
+    # Use slower timeframe + higher ADX for stocks to avoid whipsaw
+    sym_tf  = get_symbol_timeframe(symbol, timeframe)
+    sym_adx = adx_min if is_crypto(symbol) else max(adx_min, STOCK_ADX_MIN)
 
-    df = fetch_ohlcv(limit=150, symbol=symbol, timeframe=timeframe)
+    df = fetch_ohlcv(limit=150, symbol=symbol, timeframe=sym_tf)
     if df is None or len(df) < 2:
         return
     df = generate_signals(df, ema_fast=ema_fast, ema_slow=ema_slow,
-                          rsi_overbought=rsi_overbought, adx_min=adx_min)
+                          rsi_overbought=rsi_overbought, adx_min=sym_adx)
     if len(df) == 0:
         return
     last   = df.iloc[-1]
