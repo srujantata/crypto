@@ -332,6 +332,7 @@ class App(ctk.CTk):
         self._ws_status    = "disconnected"
 
         self._entry_prices: dict = {}
+        self._entry_sizes:  dict = {}   # qty held per symbol for $ P&L calc
         self._last_updated: dict = {}
 
         self._build_menu()
@@ -558,30 +559,61 @@ class App(ctk.CTk):
         _btn(bar, "trades csv", self._open_csv, BG_CARD, "#1a1a1a",
              width=int(110 * s), side="right")
 
-        # ── Activity log ──────────────────────────────────────────────────────
-        log_wrap = ctk.CTkFrame(tab_local, fg_color=BG_CARD,
-                                corner_radius=6, border_width=1, border_color=BORDER_MED)
-        log_wrap.pack(fill="both", expand=True, padx=int(16 * s), pady=(0, int(14 * s)))
+        # ── Bottom: activity log + trade history side by side ─────────────────
+        bottom = ctk.CTkFrame(tab_local, fg_color="transparent")
+        bottom.pack(fill="both", expand=True, padx=int(16 * s), pady=(0, int(14 * s)))
+        bottom.columnconfigure(0, weight=3)
+        bottom.columnconfigure(1, weight=2)
+        bottom.rowconfigure(0, weight=1)
 
+        # Activity log (left)
+        log_wrap = ctk.CTkFrame(bottom, fg_color=BG_CARD,
+                                corner_radius=6, border_width=1, border_color=BORDER_MED)
+        log_wrap.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
         log_hdr = ctk.CTkFrame(log_wrap, fg_color="transparent")
         log_hdr.pack(fill="x", padx=12, pady=(8, 0))
         ctk.CTkLabel(log_hdr, text="activity log",
                      font=F(9, bold=True), text_color=TEXT_SEC).pack(side="left")
-
         ctk.CTkFrame(log_wrap, fg_color=BORDER, height=1, corner_radius=0
-                     ).pack(fill="x", padx=0, pady=(6, 0))
-
+                     ).pack(fill="x", pady=(6, 0))
         self._log_box = ctk.CTkTextbox(
             log_wrap, font=(FONT_MONO, int(11 * s)),
             fg_color=BG_BASE, text_color=TEXT_SEC,
             state="disabled", wrap="word",
         )
-        self._log_box.pack(fill="both", expand=True, padx=0, pady=0)
+        self._log_box.pack(fill="both", expand=True)
         for tag, color in [
-            ("green",  GREEN),  ("red",    RED),    ("cyan",   CYAN),
-            ("yellow", YELLOW), ("orange", ACCENT),  ("white",  TEXT_PRI),
+            ("green", GREEN), ("red", RED), ("cyan", CYAN),
+            ("yellow", YELLOW), ("orange", ACCENT), ("white", TEXT_PRI), ("gray", TEXT_SEC),
         ]:
             self._log_box._textbox.tag_config(tag, foreground=color)
+
+        # Trade history (right)
+        th_wrap = ctk.CTkFrame(bottom, fg_color=BG_CARD,
+                               corner_radius=6, border_width=1, border_color=BORDER_MED)
+        th_wrap.grid(row=0, column=1, sticky="nsew")
+        th_hdr = ctk.CTkFrame(th_wrap, fg_color="transparent")
+        th_hdr.pack(fill="x", padx=12, pady=(8, 0))
+        ctk.CTkLabel(th_hdr, text="trade history",
+                     font=F(9, bold=True), text_color=TEXT_SEC).pack(side="left")
+        ctk.CTkButton(th_hdr, text="↻", width=int(22 * s), height=int(18 * s),
+                      fg_color="transparent", hover_color=BG_INPUT,
+                      font=F(10), text_color=TEXT_SEC,
+                      command=lambda: threading.Thread(
+                          target=self._refresh_trade_history, daemon=True).start()
+                      ).pack(side="right")
+        ctk.CTkFrame(th_wrap, fg_color=BORDER, height=1, corner_radius=0
+                     ).pack(fill="x", pady=(6, 0))
+        self._trade_log = ctk.CTkTextbox(
+            th_wrap, font=(FONT_MONO, int(10 * s)),
+            fg_color=BG_BASE, text_color=TEXT_SEC,
+            state="disabled", wrap="none",
+        )
+        self._trade_log.pack(fill="both", expand=True)
+        for tag, color in [("green", GREEN), ("red", RED), ("cyan", CYAN), ("white", TEXT_PRI)]:
+            self._trade_log._textbox.tag_config(tag, foreground=color)
+
+        threading.Thread(target=self._refresh_trade_history, daemon=True).start()
 
 
     # ── stat widget ───────────────────────────────────────────────────────────
@@ -678,18 +710,25 @@ class App(ctk.CTk):
                         sig_col = {1: GREEN, -1: RED, 0: TEXT_SEC}.get(sig, TEXT_SEC)
                         row["signal"].configure(text=sig_txt, text_color=sig_col)
                         in_pos = msg["in_position"]
-                        row["status"].configure(
-                            text="● in position" if in_pos else "flat",
-                            text_color=GREEN if in_pos else TEXT_SEC,
-                        )
-                        entry = self._entry_prices.get(sym, 0)
+                        entry  = self._entry_prices.get(sym, 0)
                         if in_pos and entry > 0:
-                            pct = (price - entry) / entry * 100
+                            row["status"].configure(
+                                text=f"● in @ ${entry:,.2f}",
+                                text_color=GREEN,
+                            )
+                            pct    = (price - entry) / entry * 100
+                            dollar = (price - entry) * (
+                                self._entry_sizes.get(sym, 0) or 1
+                            )
                             row["upnl"].configure(
                                 text=f"{pct:+.2f}%",
                                 text_color=GREEN if pct >= 0 else RED,
                             )
+                        elif in_pos:
+                            row["status"].configure(text="● in position", text_color=GREEN)
+                            row["upnl"].configure(text="—", text_color=TEXT_SEC)
                         else:
+                            row["status"].configure(text="flat", text_color=TEXT_SEC)
                             row["upnl"].configure(text="—", text_color=TEXT_SEC)
 
                 elif kind == "balance":
@@ -700,20 +739,24 @@ class App(ctk.CTk):
                     sym    = msg["symbol"]
                     action = msg["action"]
                     price  = msg["price"]
+                    qty    = msg.get("qty", 0)
                     pnl    = msg.get("pnl", 0)
                     if action == "BUY":
                         self._entry_prices[sym] = price
+                        self._entry_sizes[sym]  = qty
                     else:
                         self._entry_prices.pop(sym, None)
+                        self._entry_sizes.pop(sym, None)
                     self._daily_pnl += pnl
                     pnl_col = GREEN if self._daily_pnl >= 0 else RED
                     self._lbl_pnl.configure(
                         text=f"p&l  ${self._daily_pnl:+,.2f}", text_color=pnl_col)
                     row = self._symbol_rows.get(sym)
                     if row:
+                        pnl_str = f"  pnl ${pnl:+.2f}" if action == "SELL" and pnl != 0 else ""
                         row["last"].configure(
-                            text=f"{action.lower()} ${price:,.2f}",
-                            text_color=GREEN if action == "BUY" else RED,
+                            text=f"{action.lower()} ${price:,.2f}{pnl_str}",
+                            text_color=GREEN if action == "BUY" else (GREEN if pnl >= 0 else RED),
                         )
                     threading.Thread(
                         target=lambda f=1200 if action == "BUY" else 600: _beep(f),
@@ -721,6 +764,7 @@ class App(ctk.CTk):
                     ).start()
                     _notify("Crypto Markets",
                             f"{action} {sym} @ ${price:,.2f}  pnl ${pnl:+.2f}")
+                    threading.Thread(target=self._refresh_trade_history, daemon=True).start()
 
                 elif kind == "log":
                     self._append_log(msg["msg"], msg.get("color", "white"))
@@ -728,6 +772,90 @@ class App(ctk.CTk):
         except Empty:
             pass
         self.after(500, self._poll_queue)
+
+    def _refresh_trade_history(self):
+        """Load trade history from Railway API and local CSV, render in trade panel."""
+        import urllib.request, urllib.error
+        rows = []
+
+        # 1 — Cloud trades via API
+        cloud_url = os.getenv("CLOUD_WS_URL", "").replace("wss://", "https://").replace("/ws", "")
+        token     = os.getenv("CLOUD_TOKEN", "")
+        if cloud_url and token:
+            try:
+                req = urllib.request.Request(
+                    f"{cloud_url}/live/trades",
+                    headers={"Authorization": f"Bearer {token}"}
+                )
+                data = json.loads(urllib.request.urlopen(req, timeout=5).read())
+                for t in data:
+                    rows.append(("cloud", t))
+            except Exception:
+                pass
+
+        # 2 — Local trades CSV
+        local_csv = os.path.join(_HERE, "trades.csv")
+        if not os.path.exists(local_csv):
+            # fallback: look beside the exe
+            local_csv = os.path.join(
+                os.path.dirname(os.path.abspath(_sys.argv[0])), "trades.csv")
+        if os.path.exists(local_csv):
+            try:
+                with open(local_csv, newline="") as f:
+                    for t in csv.DictReader(f):
+                        rows.append(("local", t))
+            except Exception:
+                pass
+
+        # Sort by timestamp descending (newest first)
+        def _ts(r):
+            try:
+                return r[1].get("timestamp", "")
+            except Exception:
+                return ""
+        rows.sort(key=_ts, reverse=True)
+        rows = rows[:40]   # cap at last 40 trades
+
+        def _render():
+            self._trade_log.configure(state="normal")
+            self._trade_log._textbox.delete("1.0", "end")
+            if not rows:
+                self._trade_log._textbox.insert("end", "  no trades yet\n", "white")
+            else:
+                hdr = f"  {'time':8}  {'sym':7}  {'side':4}  {'price':>10}  {'qty':>8}  {'p&l':>9}  src\n"
+                self._trade_log._textbox.insert("end", hdr, "white")
+                self._trade_log._textbox.insert("end", "  " + "─" * 62 + "\n", "white")
+                for src, t in rows:
+                    ts     = t.get("timestamp", "")[-8:] if len(t.get("timestamp","")) >= 8 else "—"
+                    sym    = t.get("symbol", "—")[:7]
+                    action = t.get("action", "—")
+                    price  = t.get("price", "—")
+                    qty    = t.get("qty", "—")
+                    pnl    = t.get("pnl", "")
+                    try:
+                        pnl_f   = float(pnl) if pnl not in ("", None) else None
+                        pnl_str = f"${pnl_f:+.2f}" if pnl_f is not None else "  open"
+                        pnl_col = "green" if (pnl_f or 0) >= 0 else "red"
+                    except Exception:
+                        pnl_str, pnl_col = "  open", "white"
+                    try:
+                        price_str = f"${float(price):>9,.2f}"
+                    except Exception:
+                        price_str = f"{price:>10}"
+                    try:
+                        qty_str = f"{float(qty):>8.4f}"
+                    except Exception:
+                        qty_str = f"{qty:>8}"
+                    side_col = "green" if action == "BUY" else "red"
+                    line = f"  {ts:8}  {sym:7}  "
+                    self._trade_log._textbox.insert("end", line, "white")
+                    self._trade_log._textbox.insert("end", f"{action:4}", side_col)
+                    self._trade_log._textbox.insert("end",
+                        f"  {price_str}  {qty_str}  ", "white")
+                    self._trade_log._textbox.insert("end", f"{pnl_str:>9}", pnl_col)
+                    self._trade_log._textbox.insert("end", f"  {src}\n", "white")
+            self._trade_log.configure(state="disabled")
+        self.after(0, _render)
 
     def _append_log(self, text: str, color: str = "white"):
         ts   = datetime.now().strftime("%H:%M:%S")
