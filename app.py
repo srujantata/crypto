@@ -826,7 +826,8 @@ class App(ctk.CTk):
                 self._trade_log._textbox.insert("end", hdr, "white")
                 self._trade_log._textbox.insert("end", "  " + "─" * 62 + "\n", "white")
                 for src, t in rows:
-                    ts     = t.get("timestamp", "")[-8:] if len(t.get("timestamp","")) >= 8 else "—"
+                    _raw_ts = t.get("timestamp", "")
+                    ts     = _raw_ts[:19][-8:] if len(_raw_ts) >= 19 else (_raw_ts[-8:] if len(_raw_ts) >= 8 else "—")
                     sym    = t.get("symbol", "—")[:7]
                     action = t.get("action", "—")
                     price  = t.get("price", "—")
