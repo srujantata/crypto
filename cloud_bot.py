@@ -41,7 +41,8 @@ class CloudLiveBot:
         self._stop      = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._lock      = threading.Lock()
-        self._states    = {s: {"in_position": False, "entry": 0.0, "peak": 0.0}
+        self._states    = {s: {"in_position": False, "entry": 0.0, "peak": 0.0,
+                               "last_sell_time": 0.0}
                            for s in self.SYMBOLS}
         self._client    = None
         self._connected = False
@@ -104,7 +105,7 @@ class CloudLiveBot:
         ema_f       = int(  os.getenv("EMA_FAST",            str(EMA_FAST)))
         ema_s       = int(  os.getenv("EMA_SLOW",            str(EMA_SLOW)))
         tf          =       os.getenv("TIMEFRAME",            TIMEFRAME)
-        adx_min     = int(  os.getenv("ADX_MIN",             "20"))
+        adx_min     = int(  os.getenv("ADX_MIN",             "25"))
         stock_adx   = int(  os.getenv("STOCK_ADX_MIN",       str(STOCK_ADX_MIN)))
         rsi_ob      = int(  os.getenv("RSI_OVERBOUGHT",      "70"))
         trail_pct   = float(os.getenv("TRAILING_STOP_PCT",   "0.025"))
@@ -260,6 +261,17 @@ class CloudLiveBot:
                     "color": "red",
                 })
 
+        # Re-entry cooldown: block BUY if last sell was within 2h (prevents churn on choppy symbols)
+        cooldown_secs = int(os.getenv("REENTRY_COOLDOWN_SECS", "7200"))  # default 2 hours
+        if signal == 1 and not state["in_position"]:
+            elapsed = time.time() - state.get("last_sell_time", 0.0)
+            if elapsed < cooldown_secs:
+                self._emit("bot_log", {
+                    "msg":   f"{symbol} BUY blocked — cooldown {int((cooldown_secs - elapsed)/60)}min remaining",
+                    "color": "yellow",
+                })
+                signal = 0
+
         # higher-timeframe trend filter on BUY
         if signal == 1 and not state["in_position"]:
             htf = get_higher_tf_trend(symbol, ema_fast, ema_slow)
@@ -310,7 +322,8 @@ class CloudLiveBot:
                 })
                 log.info(f"SELL {symbol}  {actual_qty:.5f} @ ${price:.2f}  PnL ${pnl:+.2f}")
             with self._lock:
-                self._states[symbol].update({"in_position": False, "entry": 0.0, "peak": 0.0})
+                self._states[symbol].update({"in_position": False, "entry": 0.0, "peak": 0.0,
+                                             "last_sell_time": time.time()})
 
     # ── helpers ───────────────────────────────────────────────────────────────
 
