@@ -88,7 +88,9 @@ def fetch_ohlcv(limit: int = BACKTEST_LIMIT, symbol: str = "BTC/USD",
             df.index.name = "timestamp"
             if df.index.tz is not None:
                 df.index = df.index.tz_localize(None)
-            return df.tail(limit).dropna()
+            # Drop last (in-progress) candle — it's incomplete and causes false signals
+            # when an EMA crossover appears on an unfinished bar then reverses on close
+            return df.iloc[:-1].tail(limit).dropna()
         except Exception as e:
             last_exc = e
             if attempt < _FETCH_RETRIES - 1:

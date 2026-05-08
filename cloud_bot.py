@@ -101,14 +101,12 @@ class CloudLiveBot:
         """
         from exchange import get_client, get_balance, fetch_ohlcv, get_position_qty, place_order, get_symbol_timeframe
         from strategy import generate_signals, get_higher_tf_trend
-        from config import EMA_FAST, EMA_SLOW, TIMEFRAME, ATR_TRAIL_MULT, STOCK_ADX_MIN
+        from config import EMA_FAST, EMA_SLOW, TIMEFRAME, ATR_TRAIL_MULT, STOCK_ADX_MIN, SYMBOL_ADX_MIN, SYMBOL_ATR_MULT
 
         risk        = float(os.getenv("RISK_PER_TRADE",     "0.05"))
         ema_f       = int(  os.getenv("EMA_FAST",            str(EMA_FAST)))
         ema_s       = int(  os.getenv("EMA_SLOW",            str(EMA_SLOW)))
         tf          =       os.getenv("TIMEFRAME",            TIMEFRAME)
-        adx_min     = int(  os.getenv("ADX_MIN",             "25"))
-        stock_adx   = int(  os.getenv("STOCK_ADX_MIN",       str(STOCK_ADX_MIN)))
         rsi_ob      = int(  os.getenv("RSI_OVERBOUGHT",      "70"))
         trail_pct   = float(os.getenv("TRAILING_STOP_PCT",   "0.025"))
         trail_mult  = float(os.getenv("ATR_TRAIL_MULT",      str(ATR_TRAIL_MULT)))
@@ -124,7 +122,7 @@ class CloudLiveBot:
             "mode":      os.getenv("MODE", "paper").upper(),
         })
         log.info(f"Connected — ${bal['cash']:,.2f} cash | tf={tf} risk={risk*100:.0f}% "
-                 f"ADX>{adx_min} ATR-trail×{trail_mult}")
+                 f"per-symbol ADX/ATR | ATR-trail×{trail_mult}")
         self._sync_positions(get_position_qty)
 
         while not self._stop.is_set():
@@ -141,7 +139,8 @@ class CloudLiveBot:
                             fetch_ohlcv, generate_signals, get_higher_tf_trend,
                             get_position_qty, place_order,
                             get_symbol_timeframe,
-                            risk, ema_f, ema_s, tf, trail_pct, trail_mult, adx_min, stock_adx, rsi_ob, hard_stop,
+                            SYMBOL_ADX_MIN, SYMBOL_ATR_MULT,
+                            risk, ema_f, ema_s, tf, trail_pct, trail_mult, rsi_ob, hard_stop,
                         )
                     except Exception as e:
                         log.warning(f"{symbol}: {e}")
@@ -186,8 +185,9 @@ class CloudLiveBot:
                  fetch_ohlcv, generate_signals, get_higher_tf_trend,
                  get_position_qty, place_order,
                  get_symbol_timeframe,
+                 symbol_adx_min, symbol_atr_mult,
                  risk, ema_fast, ema_slow, timeframe,
-                 trail_pct, trail_mult, adx_min, stock_adx, rsi_ob, hard_stop=0.05):
+                 trail_pct, trail_mult, rsi_ob, hard_stop=0.05):
 
         from exchange import is_market_open, is_crypto
         # Skip equity symbols outside NYSE/NASDAQ trading hours
@@ -198,9 +198,10 @@ class CloudLiveBot:
             })
             return
 
-        # Use slower timeframe + higher ADX for stocks to avoid whipsaw
-        sym_tf  = get_symbol_timeframe(symbol, timeframe)
-        sym_adx = adx_min if is_crypto(symbol) else stock_adx
+        # Per-symbol timeframe, ADX threshold, and ATR multiplier
+        sym_tf         = get_symbol_timeframe(symbol, timeframe)
+        sym_adx        = symbol_adx_min.get(symbol, 28 if is_crypto(symbol) else 25)
+        sym_trail_mult = symbol_atr_mult.get(symbol, trail_mult)
 
         df = fetch_ohlcv(limit=150, symbol=symbol, timeframe=sym_tf)
         if df is None or len(df) < 30:
@@ -237,7 +238,7 @@ class CloudLiveBot:
             # adaptive stop distance: ATR-based if ATR is valid, else fixed pct
             atr_at_entry = state.get("atr_entry", 0.0)
             if atr_at_entry > 0:
-                stop_dist = atr_at_entry * trail_mult
+                stop_dist = atr_at_entry * sym_trail_mult   # per-symbol ATR multiplier
                 drop_threshold = stop_dist / new_peak
             else:
                 drop_threshold = trail_pct  # fallback to fixed pct
