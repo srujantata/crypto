@@ -325,15 +325,15 @@ class CloudLiveBot:
                 })
                 log.info(f"SELL {symbol}  {actual_qty:.5f} @ ${price:.2f}  PnL ${pnl:+.2f}")
             else:
-                # Position already closed externally (near-zero qty) — log as ghost exit
-                pnl = (price - state["entry"]) * 0
-                self._log_trade(symbol, "SELL(ghost)", price, 0, 0)
+                # Position already closed externally — emit single event, no CSV write
+                # (avoids double-entry: server.py memory handles the log)
                 self._emit("bot_trade", {
-                    "symbol": symbol,
-                    "action": "SELL",
-                    "price":  price,
-                    "qty":    0,
-                    "pnl":    0,
+                    "symbol":   symbol,
+                    "action":   "SELL",
+                    "price":    price,
+                    "qty":      None,       # None = externally closed, qty unknown
+                    "pnl":      None,       # None = P&L unknown (position was closed outside bot)
+                    "note":     "ext",      # tag for display
                 })
                 log.info(f"SELL {symbol} — position already closed externally (qty~0)")
             with self._lock:

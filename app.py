@@ -808,7 +808,6 @@ class App(ctk.CTk):
         # 2 — Local trades CSV
         local_csv = os.path.join(_HERE, "trades.csv")
         if not os.path.exists(local_csv):
-            # fallback: look beside the exe
             local_csv = os.path.join(
                 os.path.dirname(os.path.abspath(_sys.argv[0])), "trades.csv")
         if os.path.exists(local_csv):
@@ -819,54 +818,116 @@ class App(ctk.CTk):
             except Exception:
                 pass
 
-        # Sort by timestamp descending (newest first)
-        def _ts(r):
+        # Sort newest first
+        rows.sort(key=lambda r: r[1].get("timestamp", ""), reverse=True)
+
+        # Deduplicate: same symbol + normalised action + timestamp-to-minute = same trade
+        seen_keys: set = set()
+        deduped: list  = []
+        for src, t in rows:
+            raw_action = t.get("action", "")
+            action_norm = "SELL" if "SELL" in raw_action.upper() else raw_action.upper()
+            sym    = t.get("symbol", "")
+            ts_min = t.get("timestamp", "")[:16]   # minute-precision key
+            key    = (sym, action_norm, ts_min)
+            if key not in seen_keys:
+                seen_keys.add(key)
+                # store normalised copy
+                t2 = dict(t)
+                t2["action"] = action_norm
+                deduped.append((src, t2))
+        rows = deduped[:50]   # cap at 50
+
+        # Compute running realized P&L total
+        total_pnl = 0.0
+        for _, t in rows:
             try:
-                return r[1].get("timestamp", "")
+                v = float(t.get("pnl", "") or 0)
+                total_pnl += v
             except Exception:
-                return ""
-        rows.sort(key=_ts, reverse=True)
-        rows = rows[:40]   # cap at last 40 trades
+                pass
 
         def _render():
             self._trade_log.configure(state="normal")
             self._trade_log._textbox.delete("1.0", "end")
             if not rows:
-                self._trade_log._textbox.insert("end", "  no trades yet\n", "white")
+                self._trade_log._textbox.insert("end",
+                    "  no trades recorded yet\n  (trades appear after first buy/sell)\n", "white")
             else:
-                hdr = f"  {'time':8}  {'sym':7}  {'side':4}  {'price':>10}  {'qty':>8}  {'p&l':>9}  src\n"
+                # Summary line
+                pnl_col = "green" if total_pnl >= 0 else "red"
+                self._trade_log._textbox.insert("end",
+                    f"  {len(rows)} trades  realized p&l: ", "white")
+                self._trade_log._textbox.insert("end",
+                    f"${total_pnl:+.2f}\n", pnl_col)
+                self._trade_log._textbox.insert("end", "  " + "─" * 72 + "\n", "white")
+
+                # Header
+                hdr = (f"  {'date':5}  {'time':8}  {'symbol':<8}  {'side':4}"
+                       f"  {'price':>10}  {'qty':>10}  {'p&l':>9}  {'note':<6}  src\n")
                 self._trade_log._textbox.insert("end", hdr, "white")
-                self._trade_log._textbox.insert("end", "  " + "─" * 62 + "\n", "white")
+                self._trade_log._textbox.insert("end", "  " + "─" * 72 + "\n", "white")
+
+                prev_date = None
                 for src, t in rows:
-                    _raw_ts = t.get("timestamp", "")
-                    ts     = _raw_ts[:19][-8:] if len(_raw_ts) >= 19 else (_raw_ts[-8:] if len(_raw_ts) >= 8 else "—")
-                    sym    = t.get("symbol", "—")[:7]
+                    raw_ts  = t.get("timestamp", "")
+                    # Parse date + time — handle both local and UTC ISO strings
+                    date_str = raw_ts[5:10]  if len(raw_ts) >= 10 else "—"   # MM-DD
+                    time_str = raw_ts[11:19] if len(raw_ts) >= 19 else raw_ts[-8:] if len(raw_ts) >= 8 else "—"
+
+                    # Date separator when day changes
+                    if date_str != prev_date and date_str != "—":
+                        self._trade_log._textbox.insert("end",
+                            f"  ── {date_str} {'─'*58}\n", "white")
+                        prev_date = date_str
+
+                    sym    = t.get("symbol", "—")[:8]
                     action = t.get("action", "—")
-                    price  = t.get("price", "—")
-                    qty    = t.get("qty", "—")
-                    pnl    = t.get("pnl", "")
+                    price  = t.get("price",  "")
+                    qty    = t.get("qty",    "")
+                    pnl    = t.get("pnl",    "")
+                    note   = t.get("note",   "")
+
+                    # Price formatting
                     try:
-                        pnl_f   = float(pnl) if pnl not in ("", None) else None
-                        pnl_str = f"${pnl_f:+.2f}" if pnl_f is not None else "  open"
-                        pnl_col = "green" if (pnl_f or 0) >= 0 else "red"
+                        price_f   = float(price)
+                        price_str = f"${price_f:>9,.4f}" if price_f < 10 else f"${price_f:>9,.2f}"
                     except Exception:
-                        pnl_str, pnl_col = "  open", "white"
+                        price_str = f"{'—':>10}"
+
+                    # Qty formatting
                     try:
-                        price_str = f"${float(price):>9,.2f}"
+                        qty_f   = float(qty)
+                        qty_str = f"{qty_f:>10,.4f}" if qty_f < 1000 else f"{qty_f:>10,.0f}"
                     except Exception:
-                        price_str = f"{price:>10}"
+                        qty_str = f"{'ext':>10}"    # externally closed
+
+                    # P&L formatting — colour + amount
                     try:
-                        qty_str = f"{float(qty):>8.4f}"
+                        pnl_f = float(pnl) if pnl not in ("", None) else None
                     except Exception:
-                        qty_str = f"{qty:>8}"
+                        pnl_f = None
+
+                    if action == "BUY":
+                        pnl_str, pnl_col = "  open  ", "white"
+                    elif pnl_f is not None:
+                        pnl_str = f"${pnl_f:>+8.2f}"
+                        pnl_col = "green" if pnl_f >= 0 else "red"
+                    else:
+                        pnl_str = "  closed" if note == "ext" else "    —   "
+                        pnl_col = "white"
+
                     side_col = "green" if action == "BUY" else "red"
-                    line = f"  {ts:8}  {sym:7}  "
-                    self._trade_log._textbox.insert("end", line, "white")
-                    self._trade_log._textbox.insert("end", f"{action:4}", side_col)
+                    src_abbr = "☁" if src == "cloud" else "⬡"
+
+                    line1 = f"  {date_str:5}  {time_str:8}  {sym:<8}  "
+                    self._trade_log._textbox.insert("end", line1, "white")
+                    self._trade_log._textbox.insert("end", f"{action:<4}", side_col)
                     self._trade_log._textbox.insert("end",
                         f"  {price_str}  {qty_str}  ", "white")
                     self._trade_log._textbox.insert("end", f"{pnl_str:>9}", pnl_col)
-                    self._trade_log._textbox.insert("end", f"  {src}\n", "white")
+                    self._trade_log._textbox.insert("end", f"  {note:<6}  {src_abbr}\n", "white")
+
             self._trade_log.configure(state="disabled")
         self.after(0, _render)
 

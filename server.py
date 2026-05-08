@@ -103,13 +103,16 @@ def _live_bot_event(event_type: str, payload: dict):
     # Capture completed trades into in-memory log for /live/trades endpoint
     if event_type == "bot_trade":
         from datetime import datetime
+        qty = payload.get("qty")
+        pnl = payload.get("pnl")
         _trade_history.append({
             "timestamp": datetime.utcnow().isoformat(),
             "symbol":    payload.get("symbol", ""),
             "action":    payload.get("action", ""),
-            "price":     f"{payload.get('price', 0):.4f}",
-            "qty":       f"{payload.get('qty', 0):.6f}",
-            "pnl":       f"{payload.get('pnl', ''):.2f}" if payload.get("pnl") not in (None, "") else "",
+            "price":     f"{float(payload.get('price', 0)):.4f}",
+            "qty":       f"{float(qty):.6f}" if qty not in (None, "") else "",
+            "pnl":       f"{float(pnl):.2f}"  if pnl not in (None, "") else "",
+            "note":      payload.get("note", ""),
         })
     msg = json.dumps({"type": event_type, **payload})
     if _event_loop and _event_loop.is_running():
