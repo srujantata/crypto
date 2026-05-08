@@ -109,6 +109,7 @@ class CloudLiveBot:
         rsi_ob      = int(  os.getenv("RSI_OVERBOUGHT",      "70"))
         trail_pct   = float(os.getenv("TRAILING_STOP_PCT",   "0.025"))
         trail_mult  = float(os.getenv("ATR_TRAIL_MULT",      str(ATR_TRAIL_MULT)))
+        hard_stop   = float(os.getenv("HARD_STOP_PCT",       "0.05"))
         poll        = int(  os.getenv("POLL_SECONDS",        "60"))
 
         self._client = get_client()
@@ -137,7 +138,7 @@ class CloudLiveBot:
                             fetch_ohlcv, generate_signals, get_higher_tf_trend,
                             get_position_qty, place_order,
                             get_symbol_timeframe,
-                            risk, ema_f, ema_s, tf, trail_pct, trail_mult, adx_min, stock_adx, rsi_ob,
+                            risk, ema_f, ema_s, tf, trail_pct, trail_mult, adx_min, stock_adx, rsi_ob, hard_stop,
                         )
                     except Exception as e:
                         log.warning(f"{symbol}: {e}")
@@ -183,7 +184,7 @@ class CloudLiveBot:
                  get_position_qty, place_order,
                  get_symbol_timeframe,
                  risk, ema_fast, ema_slow, timeframe,
-                 trail_pct, trail_mult, adx_min, stock_adx, rsi_ob):
+                 trail_pct, trail_mult, adx_min, stock_adx, rsi_ob, hard_stop=0.05):
 
         from exchange import is_market_open, is_crypto
         # Skip equity symbols outside NYSE/NASDAQ trading hours
@@ -244,6 +245,19 @@ class CloudLiveBot:
                     "msg":   f"{symbol} TRAILING STOP — dropped {drop*100:.1f}% "
                              f"(threshold {drop_threshold*100:.1f}%) from peak",
                     "color": "orange",
+                })
+
+        # Hard stop-loss: backstop for trending-against-us positions
+        # Trailing stop only fires after price peaks; hard stop catches entries
+        # that go immediately underwater (e.g. DOGE ADX downtrend, ETH dump).
+        if state["in_position"] and state["entry"] > 0 and signal != -1:
+            loss_pct = (state["entry"] - price) / state["entry"]
+            if loss_pct >= hard_stop:
+                signal = -1
+                self._emit("bot_log", {
+                    "msg":   f"{symbol} HARD STOP — down {loss_pct*100:.1f}% from entry "
+                             f"${state['entry']:.2f} (limit {hard_stop*100:.0f}%)",
+                    "color": "red",
                 })
 
         # higher-timeframe trend filter on BUY

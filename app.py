@@ -110,6 +110,7 @@ _live_cfg: dict = {
     "adx_min":        25,
     "rsi_overbought": 70,
     "trailing_stop":  0.025,
+    "hard_stop":      0.05,
     "poll_seconds":   60,
     "kill_switch":    False,
 }
@@ -190,6 +191,17 @@ def _trade_symbol(symbol: str, state: dict, client, bal: dict):
             _post("log", msg=f"{symbol} TRAILING STOP — {drop*100:.1f}% "
                              f"(threshold {drop_threshold*100:.1f}%) from peak ${state['peak']:,.4f}",
                   color="orange")
+
+    # Hard stop-loss: backstop for positions that go immediately underwater
+    from config import HARD_STOP_PCT
+    hard_stop = _live_cfg.get("hard_stop", HARD_STOP_PCT)
+    if state["in_position"] and state["entry"] > 0 and signal != -1:
+        loss_pct = (state["entry"] - price) / state["entry"]
+        if loss_pct >= hard_stop:
+            signal = -1
+            _post("log", msg=f"{symbol} HARD STOP — down {loss_pct*100:.1f}% from entry "
+                             f"${state['entry']:,.4f} (limit {hard_stop*100:.0f}%)",
+                  color="red")
 
     if signal == 1 and not state["in_position"]:
         htf = get_higher_tf_trend(symbol, ema_fast, ema_slow)

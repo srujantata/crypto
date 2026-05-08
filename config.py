@@ -40,6 +40,7 @@ RSI_OVERSOLD    = 40    # RSI floor for BUY — rejects failed oversold bounces
 VOL_SURGE_MULT  = 1.2   # volume must be 1.2× average for crossover entries
 ADX_FADE_EXIT   = 18    # sell when ADX drops below this AND MACD turns negative
 ATR_TRAIL_MULT  = 1.8   # trailing stop = ATR × this multiplier (adaptive to volatility)
+HARD_STOP_PCT   = 0.05  # hard stop-loss — exit if position drops > 5% from entry price
 
 # Stock-specific overrides — slower timeframe + higher trend filter
 STOCK_TIMEFRAME = "1h"  # stocks use 1h candles — reduces whipsaw vs 15m
