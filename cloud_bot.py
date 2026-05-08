@@ -46,7 +46,9 @@ class CloudLiveBot:
                            for s in self.SYMBOLS}
         self._client    = None
         self._connected = False
-        self._log_path  = os.path.join(os.path.dirname(__file__), "cloud_trades.csv")
+        self._log_path      = os.path.join(os.path.dirname(__file__), "cloud_trades.csv")
+        self._cooldown_path = os.path.join(os.path.dirname(__file__), "cooldown_state.json")
+        self._load_cooldown_state()
 
     # ── lifecycle ─────────────────────────────────────────────────────────────
 
@@ -324,8 +326,33 @@ class CloudLiveBot:
             with self._lock:
                 self._states[symbol].update({"in_position": False, "entry": 0.0, "peak": 0.0,
                                              "last_sell_time": time.time()})
+            self._save_cooldown_state()
 
     # ── helpers ───────────────────────────────────────────────────────────────
+
+    def _load_cooldown_state(self):
+        """Restore last_sell_time from disk so cooldowns survive redeploys."""
+        try:
+            import json as _json
+            if os.path.exists(self._cooldown_path):
+                data = _json.loads(open(self._cooldown_path).read())
+                for sym, ts in data.items():
+                    if sym in self._states:
+                        self._states[sym]["last_sell_time"] = float(ts)
+                log.info(f"Cooldown state loaded for {len(data)} symbols")
+        except Exception as e:
+            log.warning(f"Could not load cooldown state: {e}")
+
+    def _save_cooldown_state(self):
+        """Persist last_sell_time to disk after every sell."""
+        try:
+            import json as _json
+            data = {s: v["last_sell_time"] for s, v in self._states.items()
+                    if v.get("last_sell_time", 0) > 0}
+            with open(self._cooldown_path, "w") as f:
+                f.write(_json.dumps(data))
+        except Exception as e:
+            log.warning(f"Could not save cooldown state: {e}")
 
     def _emit(self, event_type: str, payload: dict):
         try:
