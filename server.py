@@ -4,6 +4,7 @@ Deploy to Railway: railway up
 Run locally:  uvicorn server:app --host 0.0.0.0 --port 8000
 """
 import asyncio
+import collections
 import csv
 import hashlib
 import hmac
@@ -81,6 +82,10 @@ _ws_lock    = asyncio.Lock()
 
 _event_loop: Optional[asyncio.AbstractEventLoop] = None
 
+# In-memory trade log — survives within a session even if cloud_trades.csv resets.
+# Capped at 500 entries (newest kept on overflow).
+_trade_history: collections.deque = collections.deque(maxlen=500)
+
 
 async def _broadcast_raw(msg: str):
     async with _ws_lock:
@@ -95,6 +100,17 @@ async def _broadcast_raw(msg: str):
 
 def _live_bot_event(event_type: str, payload: dict):
     """Called from cloud_bot thread — push to all WebSocket clients."""
+    # Capture completed trades into in-memory log for /live/trades endpoint
+    if event_type == "bot_trade":
+        from datetime import datetime
+        _trade_history.append({
+            "timestamp": datetime.utcnow().isoformat(),
+            "symbol":    payload.get("symbol", ""),
+            "action":    payload.get("action", ""),
+            "price":     f"{payload.get('price', 0):.4f}",
+            "qty":       f"{payload.get('qty', 0):.6f}",
+            "pnl":       f"{payload.get('pnl', ''):.2f}" if payload.get("pnl") not in (None, "") else "",
+        })
     msg = json.dumps({"type": event_type, **payload})
     if _event_loop and _event_loop.is_running():
         asyncio.run_coroutine_threadsafe(_broadcast_raw(msg), _event_loop)
@@ -145,11 +161,30 @@ async def get_live_status():
 
 @app.get("/live/trades", dependencies=[Depends(verify_token), Depends(rate_limit)])
 async def get_live_trades():
+    # Merge CSV trades + in-memory trades, deduplicated by timestamp+symbol
+    seen: set = set()
+    trades: list = []
+
+    # CSV (may be empty/missing after redeploy)
     path = os.path.join(os.path.dirname(__file__), "cloud_trades.csv")
-    if not os.path.exists(path):
-        return []
-    with open(path, newline="") as f:
-        return list(csv.DictReader(f))
+    if os.path.exists(path):
+        with open(path, newline="") as f:
+            for row in csv.DictReader(f):
+                key = (row.get("timestamp", ""), row.get("symbol", ""))
+                if key not in seen:
+                    seen.add(key)
+                    trades.append(row)
+
+    # In-memory (current session)
+    for row in _trade_history:
+        key = (row.get("timestamp", ""), row.get("symbol", ""))
+        if key not in seen:
+            seen.add(key)
+            trades.append(row)
+
+    # Sort newest first
+    trades.sort(key=lambda r: r.get("timestamp", ""), reverse=True)
+    return trades
 
 
 # ── WebSocket endpoint ────────────────────────────────────────────────────────
