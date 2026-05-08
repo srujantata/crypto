@@ -11,7 +11,7 @@ CRYPTO_SYMBOLS = [
     "BTC/USD",
     "ETH/USD",
     "SOL/USD",
-    # DOGE/USD removed — Hurst exponent ~0.5 (near random walk), poor trend-following candidate
+    "DOGE/USD",   # kept for exit-only — ADX threshold set to 35 in SYMBOL_ADX_MIN so no new entries
     "AVAX/USD",
     "LINK/USD",
     "LTC/USD",
@@ -54,6 +54,7 @@ SYMBOL_ADX_MIN = {
     "BTC/USD":  30,
     "ETH/USD":  30,
     "SOL/USD":  28,
+    "DOGE/USD": 35,   # exit-only: ADX never reaches 35 in normal markets, blocks new entries
     "AVAX/USD": 28,
     "LINK/USD": 28,
     "LTC/USD":  28,
@@ -71,6 +72,7 @@ SYMBOL_ATR_MULT = {
     "BTC/USD":  2.0,
     "ETH/USD":  2.0,
     "SOL/USD":  2.5,
+    "DOGE/USD": 3.5,   # wide stop for noisy meme coin — let existing position breathe to exit
     "AVAX/USD": 2.5,
     "LINK/USD": 2.5,
     "LTC/USD":  2.5,
