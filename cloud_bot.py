@@ -324,6 +324,18 @@ class CloudLiveBot:
                     "pnl":    pnl,
                 })
                 log.info(f"SELL {symbol}  {actual_qty:.5f} @ ${price:.2f}  PnL ${pnl:+.2f}")
+            else:
+                # Position already closed externally (near-zero qty) — log as ghost exit
+                pnl = (price - state["entry"]) * 0
+                self._log_trade(symbol, "SELL(ghost)", price, 0, 0)
+                self._emit("bot_trade", {
+                    "symbol": symbol,
+                    "action": "SELL",
+                    "price":  price,
+                    "qty":    0,
+                    "pnl":    0,
+                })
+                log.info(f"SELL {symbol} — position already closed externally (qty~0)")
             with self._lock:
                 self._states[symbol].update({"in_position": False, "entry": 0.0, "peak": 0.0,
                                              "last_sell_time": time.time()})
