@@ -38,7 +38,8 @@ RSI_PERIOD      = 14
 RSI_OVERBOUGHT  = 70
 RSI_OVERSOLD    = 40    # RSI floor for BUY — rejects failed oversold bounces
 VOL_SURGE_MULT  = 1.5   # raised 1.2→1.5: crossover entries need 1.5× average volume
-ADX_FADE_EXIT   = 18    # sell when ADX drops below this AND MACD turns negative
+ADX_FADE_EXIT   = 20    # sell when ADX drops below this AND MACD turns negative
+                        # raised 18→20: catches dying trends earlier (META-style: ADX~19, MACD neg)
 ATR_TRAIL_MULT  = 2.0   # raised 1.8→2.0: BTC/ETH trailing stop baseline
 HARD_STOP_PCT   = 0.05  # hard stop-loss — exit if position drops > 5% from entry price
 
