@@ -852,81 +852,75 @@ class App(ctk.CTk):
             self._trade_log._textbox.delete("1.0", "end")
             if not rows:
                 self._trade_log._textbox.insert("end",
-                    "  no trades recorded yet\n  (trades appear after first buy/sell)\n", "white")
+                    "  no trades yet\n", "white")
             else:
-                # Summary line
+                # ── summary bar ──────────────────────────────────────────────
                 pnl_col = "green" if total_pnl >= 0 else "red"
                 self._trade_log._textbox.insert("end",
-                    f"  {len(rows)} trades  realized p&l: ", "white")
+                    f"  {len(rows)} trades    realized: ", "white")
                 self._trade_log._textbox.insert("end",
-                    f"${total_pnl:+.2f}\n", pnl_col)
-                self._trade_log._textbox.insert("end", "  " + "─" * 72 + "\n", "white")
+                    f"${total_pnl:+.2f}\n\n", pnl_col)
 
-                # Header
-                hdr = (f"  {'date':5}  {'time':8}  {'symbol':<8}  {'side':4}"
-                       f"  {'price':>10}  {'qty':>10}  {'p&l':>9}  {'note':<6}  src\n")
+                # ── header ────────────────────────────────────────────────────
+                hdr = f"  {'when':<15}  {'symbol':<9}  {'side':<4}  {'price':>11}  {'result':>11}\n"
                 self._trade_log._textbox.insert("end", hdr, "white")
-                self._trade_log._textbox.insert("end", "  " + "─" * 72 + "\n", "white")
+                self._trade_log._textbox.insert("end", "  " + "─" * 55 + "\n", "white")
 
+                # ── rows ──────────────────────────────────────────────────────
                 prev_date = None
                 for src, t in rows:
-                    raw_ts  = t.get("timestamp", "")
-                    # Parse date + time — handle both local and UTC ISO strings
-                    date_str = raw_ts[5:10]  if len(raw_ts) >= 10 else "—"   # MM-DD
-                    time_str = raw_ts[11:19] if len(raw_ts) >= 19 else raw_ts[-8:] if len(raw_ts) >= 8 else "—"
+                    raw_ts   = t.get("timestamp", "")
+                    date_str = raw_ts[5:10]  if len(raw_ts) >= 10 else ""
+                    time_str = raw_ts[11:16] if len(raw_ts) >= 16 else raw_ts[-5:] if len(raw_ts) >= 5 else "—"
+                    when     = f"{date_str} {time_str}" if date_str else time_str
 
-                    # Date separator when day changes
-                    if date_str != prev_date and date_str != "—":
-                        self._trade_log._textbox.insert("end",
-                            f"  ── {date_str} {'─'*58}\n", "white")
+                    # Day divider
+                    if date_str and date_str != prev_date:
+                        if prev_date is not None:
+                            self._trade_log._textbox.insert("end", "\n", "white")
                         prev_date = date_str
 
-                    sym    = t.get("symbol", "—")[:8]
-                    action = t.get("action", "—")
-                    price  = t.get("price",  "")
-                    qty    = t.get("qty",    "")
-                    pnl    = t.get("pnl",    "")
-                    note   = t.get("note",   "")
+                    sym    = t.get("symbol", "—")
+                    # shorten crypto pairs: BTC/USD → BTC
+                    sym_short = sym.split("/")[0] if "/" in sym else sym
+                    action = t.get("action", "—").upper()
+                    price  = t.get("price", "")
+                    pnl    = t.get("pnl", "")
+                    note   = t.get("note", "")
 
-                    # Price formatting
+                    # price
                     try:
-                        price_f   = float(price)
-                        price_str = f"${price_f:>9,.4f}" if price_f < 10 else f"${price_f:>9,.2f}"
+                        pf = float(price)
+                        price_str = f"${pf:,.4f}" if pf < 10 else f"${pf:,.2f}"
                     except Exception:
-                        price_str = f"{'—':>10}"
+                        price_str = "—"
 
-                    # Qty formatting
-                    try:
-                        qty_f   = float(qty)
-                        qty_str = f"{qty_f:>10,.4f}" if qty_f < 1000 else f"{qty_f:>10,.0f}"
-                    except Exception:
-                        qty_str = f"{'ext':>10}"    # externally closed
-
-                    # P&L formatting — colour + amount
+                    # result
                     try:
                         pnl_f = float(pnl) if pnl not in ("", None) else None
                     except Exception:
                         pnl_f = None
 
                     if action == "BUY":
-                        pnl_str, pnl_col = "  open  ", "white"
+                        result, res_col = "open", "white"
                     elif pnl_f is not None:
-                        pnl_str = f"${pnl_f:>+8.2f}"
-                        pnl_col = "green" if pnl_f >= 0 else "red"
+                        result  = f"${pnl_f:+.2f}"
+                        res_col = "green" if pnl_f >= 0 else "red"
+                    elif note == "ext":
+                        result, res_col = "ext.exit", "white"
                     else:
-                        pnl_str = "  closed" if note == "ext" else "    —   "
-                        pnl_col = "white"
+                        result, res_col = "—", "white"
 
                     side_col = "green" if action == "BUY" else "red"
-                    src_abbr = "☁" if src == "cloud" else "⬡"
 
-                    line1 = f"  {date_str:5}  {time_str:8}  {sym:<8}  "
-                    self._trade_log._textbox.insert("end", line1, "white")
-                    self._trade_log._textbox.insert("end", f"{action:<4}", side_col)
                     self._trade_log._textbox.insert("end",
-                        f"  {price_str}  {qty_str}  ", "white")
-                    self._trade_log._textbox.insert("end", f"{pnl_str:>9}", pnl_col)
-                    self._trade_log._textbox.insert("end", f"  {note:<6}  {src_abbr}\n", "white")
+                        f"  {when:<15}  {sym_short:<9}  ", "white")
+                    self._trade_log._textbox.insert("end",
+                        f"{action:<4}", side_col)
+                    self._trade_log._textbox.insert("end",
+                        f"  {price_str:>11}  ", "white")
+                    self._trade_log._textbox.insert("end",
+                        f"{result:>11}\n", res_col)
 
             self._trade_log.configure(state="disabled")
         self.after(0, _render)
