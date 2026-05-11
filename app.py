@@ -498,34 +498,55 @@ class App(ctk.CTk):
             pad  = (int(11 * s), int(11 * s))
             base = sym.split("/")[0] if "/" in sym else sym
 
-            ctk.CTkFrame(tbl, fg_color=bg, corner_radius=0, height=int(46 * s)
-                         ).grid(row=ri, column=0, columnspan=len(COL_H),
-                                sticky="ew", padx=0, pady=0)
+            row_bg = ctk.CTkFrame(tbl, fg_color=bg, corner_radius=0, height=int(46 * s))
+            row_bg.grid(row=ri, column=0, columnspan=len(COL_H),
+                        sticky="ew", padx=0, pady=0)
 
-            lbl_sym   = ctk.CTkLabel(tbl, text=base,  font=(FONT_UI,   int(12 * s), "bold"),
+            # plain label cells
+            lbl_sym   = ctk.CTkLabel(tbl, text=base, font=(FONT_UI,   int(12 * s), "bold"),
                                       text_color=TEXT_PRI, anchor="w", fg_color=bg)
-            lbl_price = ctk.CTkLabel(tbl, text="—",   font=(FONT_MONO, int(12 * s)),
+            lbl_price = ctk.CTkLabel(tbl, text="—",  font=(FONT_MONO, int(12 * s)),
                                       text_color=TEXT_PRI, anchor="w", fg_color=bg)
-            lbl_rsi   = ctk.CTkLabel(tbl, text="—",   font=(FONT_MONO, int(11 * s)),
+            lbl_rsi   = ctk.CTkLabel(tbl, text="—",  font=(FONT_MONO, int(11 * s)),
                                       text_color=TEXT_SEC, anchor="w", fg_color=bg)
-            lbl_adx   = ctk.CTkLabel(tbl, text="—",   font=(FONT_MONO, int(11 * s)),
+            lbl_adx   = ctk.CTkLabel(tbl, text="—",  font=(FONT_MONO, int(11 * s)),
                                       text_color=TEXT_SEC, anchor="w", fg_color=bg)
-            lbl_sig   = ctk.CTkLabel(tbl, text="—",   font=(FONT_UI,   int(10 * s), "bold"),
-                                      text_color=TEXT_DIM, anchor="w", fg_color=bg)
-            lbl_stat  = ctk.CTkLabel(tbl, text="—",   font=(FONT_UI,   int(10 * s)),
-                                      text_color=TEXT_DIM, anchor="w", fg_color=bg)
-            lbl_last  = ctk.CTkLabel(tbl, text="—",   font=(FONT_MONO, int(10 * s)),
+            lbl_last  = ctk.CTkLabel(tbl, text="—",  font=(FONT_MONO, int(10 * s)),
                                       text_color=TEXT_SEC, anchor="w", fg_color=bg)
-            lbl_upnl  = ctk.CTkLabel(tbl, text="—",   font=(FONT_MONO, int(12 * s), "bold"),
+            lbl_upnl  = ctk.CTkLabel(tbl, text="—",  font=(FONT_MONO, int(12 * s), "bold"),
                                       text_color=TEXT_SEC, anchor="w", fg_color=bg)
 
-            for ci, lbl in enumerate([lbl_sym, lbl_price, lbl_rsi, lbl_adx,
-                                       lbl_sig, lbl_stat, lbl_last, lbl_upnl]):
+            # ── Signal pill (col 4) ───────────────────────────────────────────
+            sig_frame = ctk.CTkFrame(tbl, fg_color="transparent", corner_radius=5)
+            sig_label = ctk.CTkLabel(sig_frame, text="—",
+                                      font=(FONT_UI, int(10 * s), "bold"),
+                                      text_color=TEXT_DIM, fg_color="transparent")
+            sig_label.pack(padx=int(8 * s), pady=int(3 * s))
+
+            # ── Status pill (col 5) ───────────────────────────────────────────
+            stat_frame = ctk.CTkFrame(tbl, fg_color="transparent", corner_radius=5)
+            stat_label = ctk.CTkLabel(stat_frame, text="—",
+                                       font=(FONT_UI, int(10 * s)),
+                                       text_color=TEXT_DIM, fg_color="transparent")
+            stat_label.pack(padx=int(8 * s), pady=int(3 * s))
+
+            # grid plain cells
+            for ci, lbl in enumerate([lbl_sym, lbl_price, lbl_rsi, lbl_adx]):
                 lbl.grid(row=ri, column=ci, padx=int(14 * s), pady=pad, sticky="ew")
+            sig_frame.grid( row=ri, column=4, padx=int(14 * s), pady=pad, sticky="w")
+            stat_frame.grid(row=ri, column=5, padx=int(14 * s), pady=pad, sticky="w")
+            lbl_last.grid(  row=ri, column=6, padx=int(14 * s), pady=pad, sticky="ew")
+            lbl_upnl.grid(  row=ri, column=7, padx=int(14 * s), pady=pad, sticky="ew")
+
+            # row hover — lighten all plain label cells on mouse-over
+            self._bind_row_hover(row_bg,
+                                  [lbl_sym, lbl_price, lbl_rsi, lbl_adx,
+                                   lbl_last, lbl_upnl], bg)
 
             self._symbol_rows[sym] = {
                 "price": lbl_price, "rsi": lbl_rsi, "adx": lbl_adx,
-                "signal": lbl_sig, "status": lbl_stat,
+                "signal": sig_label, "sig_frame": sig_frame,
+                "status": stat_label, "stat_frame": stat_frame,
                 "last": lbl_last, "upnl": lbl_upnl,
             }
 
@@ -737,6 +758,27 @@ class App(ctk.CTk):
         lbl.pack(anchor="w")
         return lbl
 
+    # ── row hover highlight ───────────────────────────────────────────────────
+    def _bind_row_hover(self, row_bg: ctk.CTkFrame, labels: list, orig_bg: str):
+        """Subtle highlight on table row mouse-over."""
+        HOVER = "#141E2A"
+
+        def _enter(e):
+            row_bg.configure(fg_color=HOVER)
+            for lbl in labels:
+                try: lbl.configure(fg_color=HOVER)
+                except Exception: pass
+
+        def _leave(e):
+            row_bg.configure(fg_color=orig_bg)
+            for lbl in labels:
+                try: lbl.configure(fg_color=orig_bg)
+                except Exception: pass
+
+        for w in [row_bg] + labels:
+            w.bind("<Enter>", _enter, add="+")
+            w.bind("<Leave>", _leave, add="+")
+
     # ── cloud card update ─────────────────────────────────────────────────────
     def _update_cloud_card(self, name: str, data: dict):
         row = self._cloud_rows.get(name)
@@ -744,8 +786,12 @@ class App(ctk.CTk):
             return
         ret = data.get("return_pct", 0)
         col = GREEN if ret >= 0 else RED
+        usd = ret / 100 * 10_000          # $10 k starting capital per profile
         row["return"].configure(text=f"{ret:+.2f}%", text_color=col)
-        row["trades"].configure(text=f"{data.get('total_trades', 0)} trades")
+        row["trades"].configure(
+            text=f"${usd:+,.0f}  ·  {data.get('total_trades', 0)} trades",
+            text_color=col if ret != 0 else TEXT_DIM,
+        )
         row["winrate"].configure(text=f"win rate  {data.get('win_rate', 0):.1f}%")
 
         # return bar fill (cap at 100%, min 0)
@@ -872,14 +918,22 @@ class App(ctk.CTk):
                         adx_col = GREEN if adx > 25 else (YELLOW if adx > 20 else TEXT_DIM)
                         row["adx"].configure(text=f"{adx:.1f}", text_color=adx_col)
                         sig = msg["signal"]
-                        sig_txt = {1: "▲ BUY", -1: "▼ SELL", 0: "HOLD"}.get(sig, "—")
-                        sig_col = {1: GREEN, -1: RED, 0: TEXT_DIM}.get(sig, TEXT_DIM)
-                        row["signal"].configure(text=sig_txt, text_color=sig_col)
+                        if sig == 1:
+                            row["sig_frame"].configure(fg_color="#061A0A")
+                            row["signal"].configure(text="▲ BUY",  text_color=GREEN)
+                        elif sig == -1:
+                            row["sig_frame"].configure(fg_color="#1A0606")
+                            row["signal"].configure(text="▼ SELL", text_color=RED)
+                        else:
+                            row["sig_frame"].configure(fg_color="transparent")
+                            row["signal"].configure(text="HOLD",   text_color=TEXT_DIM)
                         in_pos = msg["in_position"]
-                        row["status"].configure(
-                            text="● LONG" if in_pos else "—",
-                            text_color=GREEN if in_pos else TEXT_DIM,
-                        )
+                        if in_pos:
+                            row["stat_frame"].configure(fg_color="#061A0A")
+                            row["status"].configure(text="● LONG", text_color=GREEN)
+                        else:
+                            row["stat_frame"].configure(fg_color="transparent")
+                            row["status"].configure(text="—",      text_color=TEXT_DIM)
                         entry = self._entry_prices.get(sym, 0)
                         if in_pos and entry > 0:
                             pct = (price - entry) / entry * 100
