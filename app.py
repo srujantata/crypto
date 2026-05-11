@@ -37,8 +37,8 @@ from dotenv import load_dotenv
 # ── Platform ──────────────────────────────────────────────────────────────────
 _OS = _platform.system()   # "Darwin" | "Windows" | "Linux"
 
-FONT_MONO = "Menlo"    if _OS == "Darwin" else ("Consolas"  if _OS == "Windows" else "Ubuntu Mono")
-FONT_UI   = "Menlo"    if _OS == "Darwin" else ("Consolas"  if _OS == "Windows" else "Ubuntu Mono")
+FONT_MONO = "Menlo"       if _OS == "Darwin" else ("Consolas"  if _OS == "Windows" else "Ubuntu Mono")
+FONT_UI   = "SF Pro Text" if _OS == "Darwin" else ("Segoe UI"  if _OS == "Windows" else "Ubuntu")
 
 def _beep(freq: int = 1000):
     if _sys.platform == "win32":
@@ -71,25 +71,27 @@ for _env_path in [
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("dark-blue")
 
-# ── Design tokens — Claude Code aesthetic ─────────────────────────────────────
-BG_BASE    = "#0a0a0a"   # near-black base
-BG_CARD    = "#111111"   # card / panel
-BG_ROW_A   = "#111111"   # table row even
-BG_ROW_B   = "#0d0d0d"   # table row odd
-BG_HDR     = "#0a0a0a"   # header
-BG_INPUT   = "#1a1a1a"   # input fields
+# ── Design tokens — Premium fintech dark ──────────────────────────────────────
+BG_BASE    = "#05070A"   # deep near-black base
+BG_CARD    = "#0B0F14"   # card / panel surface
+BG_CARD2   = "#0E1420"   # secondary surface / hover
+BG_ROW_A   = "#0B0F14"   # table row even
+BG_ROW_B   = "#090C10"   # table row odd
+BG_HDR     = "#05070A"   # header
+BG_INPUT   = "#111827"   # input fields
 
-ACCENT     = "#da7756"   # Claude coral-orange
-GREEN      = "#3fb950"   # muted emerald
-RED        = "#f85149"   # rose red
-YELLOW     = "#e3b341"   # amber warning
-CYAN       = "#58a6ff"   # info blue
-PURPLE     = "#bc8cff"   # purple accent
+ACCENT     = "#06B6D4"   # cyan accent
+GREEN      = "#22C55E"   # emerald positive
+RED        = "#EF4444"   # rose negative
+YELLOW     = "#F59E0B"   # amber warning
+CYAN       = "#06B6D4"   # info cyan
+PURPLE     = "#8B5CF6"   # purple accent
 
-TEXT_PRI   = "#e6edf3"   # primary text
-TEXT_SEC   = "#8b949e"   # secondary / muted
-BORDER     = "#1e1e1e"   # very subtle border
-BORDER_MED = "#2d2d2d"   # medium border for separators
+TEXT_PRI   = "#F1F5F9"   # primary text
+TEXT_SEC   = "#9CA3AF"   # secondary / muted
+TEXT_DIM   = "#4B5563"   # very muted / placeholder
+BORDER     = "#1E2530"   # very subtle border
+BORDER_MED = "#252D3A"   # medium border / separator
 
 
 def _make_tray_icon() -> Image.Image:
@@ -313,8 +315,10 @@ class App(ctk.CTk):
         self._cloud_rows:   dict = {}
         self._ws_status    = "disconnected"
 
-        self._entry_prices: dict = {}
-        self._last_updated: dict = {}
+        self._entry_prices:   dict = {}
+        self._last_updated:   dict = {}
+        self._position_qty:   dict = {}
+        self._portfolio_start: float | None = None
 
         self._build_menu()
         self._build_ui()
@@ -390,37 +394,53 @@ class App(ctk.CTk):
             return (FONT_UI, int(size * s), "bold") if bold else (FONT_UI, int(size * s))
 
         # ── Header bar ────────────────────────────────────────────────────────
-        hdr = ctk.CTkFrame(self, fg_color=BG_HDR, corner_radius=0, height=int(52 * s))
+        hdr = ctk.CTkFrame(self, fg_color=BG_HDR, corner_radius=0, height=int(60 * s))
         hdr.pack(fill="x", side="top")
         hdr.pack_propagate(False)
 
-        # left: wordmark
+        # left: wordmark + badge
         left = ctk.CTkFrame(hdr, fg_color="transparent")
         left.pack(side="left", padx=int(24 * s), pady=0, fill="y")
-        ctk.CTkLabel(left, text="◆ Crypto Markets",
-                     font=F(15, bold=True), text_color=TEXT_PRI).pack(side="left", pady=0)
-        ctk.CTkLabel(left, text="  paper trading",
-                     font=F(11), text_color=TEXT_SEC).pack(side="left", pady=0)
+        name_row = ctk.CTkFrame(left, fg_color="transparent")
+        name_row.pack(side="left", fill="y")
+        ctk.CTkLabel(name_row, text="CRYPTO",
+                     font=(FONT_UI, int(15 * s), "bold"), text_color=TEXT_PRI
+                     ).pack(side="left")
+        ctk.CTkLabel(name_row, text=" MARKETS",
+                     font=(FONT_UI, int(15 * s), "bold"), text_color=ACCENT
+                     ).pack(side="left")
+        ctk.CTkLabel(name_row, text="  ·  PAPER",
+                     font=(FONT_UI, int(10 * s)), text_color=TEXT_DIM
+                     ).pack(side="left", pady=(int(3 * s), 0))
 
         # center: clock
         center = ctk.CTkFrame(hdr, fg_color="transparent")
         center.place(relx=0.5, rely=0.5, anchor="center")
         self._lbl_clock = ctk.CTkLabel(center, text="--:--:--",
-                                        font=F(13), text_color=TEXT_SEC)
+                                        font=(FONT_MONO, int(14 * s)), text_color=TEXT_SEC)
         self._lbl_clock.pack()
 
-        # right: P&L + status
+        # right: live status + prominent P&L badge
         right = ctk.CTkFrame(hdr, fg_color="transparent")
-        right.pack(side="right", padx=int(24 * s), fill="y")
-        self._status_dot = ctk.CTkLabel(right, text="● cloud active",
-                                         font=F(11), text_color=GREEN)
-        self._status_dot.pack(side="right", padx=(12, 0))
-        self._lbl_pnl = ctk.CTkLabel(right, text="p&l  $0.00",
-                                      font=F(11), text_color=TEXT_SEC)
-        self._lbl_pnl.pack(side="right")
+        right.pack(side="right", padx=int(20 * s), fill="y")
 
-        # thin accent line under header
-        ctk.CTkFrame(self, fg_color=BORDER_MED, height=1, corner_radius=0).pack(fill="x")
+        self._status_dot = ctk.CTkLabel(right, text="● LIVE",
+                                         font=(FONT_UI, int(10 * s), "bold"), text_color=GREEN)
+        self._status_dot.pack(side="right", padx=(14, 0), anchor="center")
+
+        # P&L badge — the #1 most visible element
+        pnl_badge = ctk.CTkFrame(right, fg_color=BG_CARD, corner_radius=8,
+                                  border_width=1, border_color=BORDER_MED)
+        pnl_badge.pack(side="right", pady=int(10 * s))
+        ctk.CTkLabel(pnl_badge, text="SESSION P&L",
+                     font=(FONT_UI, int(8 * s), "bold"), text_color=TEXT_DIM
+                     ).pack(padx=int(14 * s), pady=(int(5 * s), 0), anchor="w")
+        self._lbl_pnl = ctk.CTkLabel(pnl_badge, text="$0.00",
+                                      font=(FONT_MONO, int(18 * s), "bold"), text_color=TEXT_SEC)
+        self._lbl_pnl.pack(padx=int(14 * s), pady=(0, int(5 * s)), anchor="w")
+
+        # thin separator under header
+        ctk.CTkFrame(self, fg_color=BORDER, height=1, corner_radius=0).pack(fill="x")
 
         # ── Tab view ──────────────────────────────────────────────────────────
         tabs = ctk.CTkTabview(
@@ -428,79 +448,80 @@ class App(ctk.CTk):
             fg_color=BG_BASE,
             segmented_button_fg_color=BG_BASE,
             segmented_button_selected_color=BG_CARD,
-            segmented_button_selected_hover_color="#1e1e1e",
+            segmented_button_selected_hover_color=BG_CARD2,
             segmented_button_unselected_color=BG_BASE,
-            segmented_button_unselected_hover_color="#141414",
+            segmented_button_unselected_hover_color="#0A0E13",
             text_color=TEXT_SEC,
-            text_color_disabled=TEXT_SEC,
-            border_color=BORDER_MED,
+            text_color_disabled=TEXT_DIM,
+            border_color=BORDER,
             border_width=1,
         )
         tabs.pack(fill="both", expand=True, padx=0, pady=0)
-        tab_local = tabs.add("  live bot  ")
-        tab_cloud = tabs.add("  cloud sims  ")
+        tab_local = tabs.add("  Live Bot  ")
+        tab_cloud = tabs.add("  Cloud Sims  ")
         self._build_cloud_tab(tab_cloud)
 
         # ── Portfolio strip ───────────────────────────────────────────────────
-        port = ctk.CTkFrame(tab_local, fg_color=BG_CARD,
-                             corner_radius=6, border_width=1, border_color=BORDER_MED)
-        port.pack(fill="x", padx=int(16 * s), pady=(int(12 * s), 6))
-        port.columnconfigure((0, 1, 2), weight=1)
-        self._lbl_cash      = self._stat(port, "cash",      "$—", 0)
-        self._lbl_portfolio = self._stat(port, "portfolio", "$—", 1)
-        self._stat_mode     = self._stat(port, "mode",   "paper", 2)
+        port = ctk.CTkFrame(tab_local, fg_color="transparent")
+        port.pack(fill="x", padx=int(16 * s), pady=(int(12 * s), 8))
+        port.columnconfigure((0, 1, 2, 3), weight=1)
+        self._lbl_cash        = self._stat(port, "CASH",        "$—",    0)
+        self._lbl_portfolio   = self._stat(port, "PORTFOLIO",   "$—",    1)
+        self._lbl_session_pnl = self._stat(port, "SESSION P&L", "$0.00", 2, val_color=TEXT_DIM)
+        self._stat_mode       = self._stat(port, "MODE",        "PAPER", 3)
 
         # ── Market table ──────────────────────────────────────────────────────
         COL_W = [1, 2, 1, 1, 1, 2, 2, 2]
-        COL_H = ["symbol", "price", "rsi", "adx", "signal", "status", "last trade", "unreal p&l"]
+        COL_H = ["SYMBOL", "PRICE", "RSI", "ADX", "SIGNAL", "STATUS", "LAST TRADE", "OPEN P&L"]
 
         tbl = ctk.CTkFrame(tab_local, fg_color=BG_CARD,
-                            corner_radius=6, border_width=1, border_color=BORDER_MED)
-        tbl.pack(fill="x", padx=int(16 * s), pady=(0, 6))
+                            corner_radius=8, border_width=1, border_color=BORDER)
+        tbl.pack(fill="x", padx=int(16 * s), pady=(0, 8))
         for ci, wt in enumerate(COL_W):
             tbl.columnconfigure(ci, weight=wt, uniform="col")
 
         # column headers
         for ci, txt in enumerate(COL_H):
-            ctk.CTkLabel(tbl, text=txt, font=F(9, bold=True),
-                         text_color=TEXT_SEC, anchor="center"
-                         ).grid(row=0, column=ci, padx=8, pady=(10, 4), sticky="ew")
+            ctk.CTkLabel(tbl, text=txt, font=(FONT_UI, int(8 * s), "bold"),
+                         text_color=TEXT_DIM, anchor="w"
+                         ).grid(row=0, column=ci, padx=int(14 * s),
+                                pady=(int(12 * s), int(6 * s)), sticky="ew")
 
         # header separator
-        ctk.CTkFrame(tbl, height=1, fg_color=BORDER_MED, corner_radius=0
+        ctk.CTkFrame(tbl, height=1, fg_color=BORDER, corner_radius=0
                      ).grid(row=1, column=0, columnspan=len(COL_H), sticky="ew", padx=0)
 
         # data rows
         for i, sym in enumerate(SYMBOLS):
             ri   = i + 2
             bg   = BG_ROW_A if i % 2 == 0 else BG_ROW_B
-            pad  = (int(7 * s), int(7 * s))
+            pad  = (int(11 * s), int(11 * s))
             base = sym.split("/")[0] if "/" in sym else sym
 
-            ctk.CTkFrame(tbl, fg_color=bg, corner_radius=0, height=int(40 * s)
+            ctk.CTkFrame(tbl, fg_color=bg, corner_radius=0, height=int(46 * s)
                          ).grid(row=ri, column=0, columnspan=len(COL_H),
                                 sticky="ew", padx=0, pady=0)
 
-            lbl_sym   = ctk.CTkLabel(tbl, text=base,   font=F(12, bold=True),
-                                      text_color=ACCENT, anchor="center", fg_color=bg)
-            lbl_price = ctk.CTkLabel(tbl, text="—",    font=F(12),
-                                      text_color=TEXT_PRI, anchor="center", fg_color=bg)
-            lbl_rsi   = ctk.CTkLabel(tbl, text="—",    font=F(11),
-                                      text_color=TEXT_SEC, anchor="center", fg_color=bg)
-            lbl_adx   = ctk.CTkLabel(tbl, text="—",    font=F(11),
-                                      text_color=TEXT_SEC, anchor="center", fg_color=bg)
-            lbl_sig   = ctk.CTkLabel(tbl, text="idle", font=F(11, bold=True),
-                                      text_color=TEXT_SEC, anchor="center", fg_color=bg)
-            lbl_stat  = ctk.CTkLabel(tbl, text="flat", font=F(10),
-                                      text_color=TEXT_SEC, anchor="center", fg_color=bg)
-            lbl_last  = ctk.CTkLabel(tbl, text="—",    font=F(10),
-                                      text_color=TEXT_SEC, anchor="center", fg_color=bg)
-            lbl_upnl  = ctk.CTkLabel(tbl, text="—",    font=F(11),
-                                      text_color=TEXT_SEC, anchor="center", fg_color=bg)
+            lbl_sym   = ctk.CTkLabel(tbl, text=base,  font=(FONT_UI,   int(12 * s), "bold"),
+                                      text_color=TEXT_PRI, anchor="w", fg_color=bg)
+            lbl_price = ctk.CTkLabel(tbl, text="—",   font=(FONT_MONO, int(12 * s)),
+                                      text_color=TEXT_PRI, anchor="w", fg_color=bg)
+            lbl_rsi   = ctk.CTkLabel(tbl, text="—",   font=(FONT_MONO, int(11 * s)),
+                                      text_color=TEXT_SEC, anchor="w", fg_color=bg)
+            lbl_adx   = ctk.CTkLabel(tbl, text="—",   font=(FONT_MONO, int(11 * s)),
+                                      text_color=TEXT_SEC, anchor="w", fg_color=bg)
+            lbl_sig   = ctk.CTkLabel(tbl, text="—",   font=(FONT_UI,   int(10 * s), "bold"),
+                                      text_color=TEXT_DIM, anchor="w", fg_color=bg)
+            lbl_stat  = ctk.CTkLabel(tbl, text="—",   font=(FONT_UI,   int(10 * s)),
+                                      text_color=TEXT_DIM, anchor="w", fg_color=bg)
+            lbl_last  = ctk.CTkLabel(tbl, text="—",   font=(FONT_MONO, int(10 * s)),
+                                      text_color=TEXT_SEC, anchor="w", fg_color=bg)
+            lbl_upnl  = ctk.CTkLabel(tbl, text="—",   font=(FONT_MONO, int(12 * s), "bold"),
+                                      text_color=TEXT_SEC, anchor="w", fg_color=bg)
 
             for ci, lbl in enumerate([lbl_sym, lbl_price, lbl_rsi, lbl_adx,
                                        lbl_sig, lbl_stat, lbl_last, lbl_upnl]):
-                lbl.grid(row=ri, column=ci, padx=8, pady=pad, sticky="ew")
+                lbl.grid(row=ri, column=ci, padx=int(14 * s), pady=pad, sticky="ew")
 
             self._symbol_rows[sym] = {
                 "price": lbl_price, "rsi": lbl_rsi, "adx": lbl_adx,
@@ -509,51 +530,68 @@ class App(ctk.CTk):
             }
 
         # ── Info banner ───────────────────────────────────────────────────────
-        info = ctk.CTkFrame(tab_local, fg_color="#120e0a", corner_radius=6,
-                             border_width=1, border_color="#2a1e10")
-        info.pack(fill="x", padx=int(16 * s), pady=(int(6 * s), 4))
+        info = ctk.CTkFrame(tab_local, fg_color=BG_CARD, corner_radius=6,
+                             border_width=1, border_color=BORDER)
+        info.pack(fill="x", padx=int(16 * s), pady=(int(8 * s), 4))
+        ctk.CTkLabel(info, text="◈",
+                     font=(FONT_UI, int(10 * s)), text_color=ACCENT
+                     ).pack(side="left", padx=(int(12 * s), int(6 * s)), pady=int(7 * s))
         ctk.CTkLabel(info,
-                     text="  ▸  cloud bot is trading 24/7 on railway  ·  this tab shows live prices",
-                     font=F(10), text_color=ACCENT).pack(side="left", padx=10, pady=5)
+                     text="Cloud bot trading 24/7 on Railway  ·  prices refresh every 60s",
+                     font=(FONT_UI, int(10 * s)), text_color=TEXT_DIM
+                     ).pack(side="left", pady=int(7 * s))
 
         # ── Action bar ────────────────────────────────────────────────────────
         bar = ctk.CTkFrame(tab_local, fg_color="transparent")
-        bar.pack(fill="x", padx=int(16 * s), pady=(4, 6))
+        bar.pack(fill="x", padx=int(16 * s), pady=(6, 8))
 
-        def _btn(parent, text, cmd, fg, hover, width=None, side="left"):
+        def _btn(parent, text, cmd, fg=BG_CARD, hover=BG_CARD2,
+                 text_col=None, border_col=None, width=None, side="left"):
             b = ctk.CTkButton(
                 parent, text=text, command=cmd,
-                font=F(11), fg_color=fg, hover_color=hover,
-                text_color=TEXT_PRI, corner_radius=5,
-                border_width=1, border_color=BORDER_MED,
-                width=width or int(150 * s), height=int(30 * s),
+                font=(FONT_UI, int(11 * s)),
+                fg_color=fg, hover_color=hover,
+                text_color=text_col or TEXT_SEC, corner_radius=6,
+                border_width=1, border_color=border_col or BORDER,
+                width=width or int(140 * s), height=int(32 * s),
             )
             b.pack(side=side, padx=(0, 6))
             return b
 
-        self._btn_start = _btn(bar, "cloud trades csv", self._open_cloud_trades, BG_CARD, "#1a1a1a")
-        self._btn_stop  = _btn(bar, "emergency sell all", self._emergency_sell,
-                               "#1a0505", "#2a0808", width=int(170 * s))
-        self._btn_kill  = _btn(bar, "⏸  kill switch", self._toggle_kill_switch,
-                               "#1a0f00", "#2a1800", width=int(130 * s))
-        self._btn_ontop = _btn(bar, "pin", self._toggle_ontop,
-                               BG_CARD, "#1a1a1a", width=int(60 * s))
-        _btn(bar, "settings", self._open_settings, BG_CARD, "#1a1a1a", width=int(90 * s))
-        _btn(bar, "trades csv", self._open_csv, BG_CARD, "#1a1a1a",
-             width=int(110 * s), side="right")
+        self._btn_start = _btn(bar, "Cloud Trades", self._open_cloud_trades,
+                                width=int(120 * s))
+
+        # ⚠ Emergency sell — glowing danger button
+        self._btn_stop = ctk.CTkButton(
+            bar, text="⚠  SELL ALL", command=self._emergency_sell,
+            font=(FONT_UI, int(11 * s), "bold"),
+            fg_color="#1C0808", hover_color="#2D0F0F",
+            text_color=RED, corner_radius=6,
+            border_width=1, border_color=RED,
+            width=int(120 * s), height=int(32 * s),
+        )
+        self._btn_stop.pack(side="left", padx=(0, 6))
+
+        self._btn_kill = _btn(bar, "⏸  Kill Switch", self._toggle_kill_switch,
+                               fg="#0F1508", hover="#1A2010",
+                               text_col=YELLOW, border_col=BORDER,
+                               width=int(130 * s))
+        self._btn_ontop = _btn(bar, "Pin", self._toggle_ontop, width=int(60 * s))
+        _btn(bar, "Settings", self._open_settings, width=int(90 * s))
+        _btn(bar, "Trades CSV", self._open_csv, width=int(110 * s), side="right")
 
         # ── Activity log ──────────────────────────────────────────────────────
         log_wrap = ctk.CTkFrame(tab_local, fg_color=BG_CARD,
-                                corner_radius=6, border_width=1, border_color=BORDER_MED)
+                                corner_radius=8, border_width=1, border_color=BORDER)
         log_wrap.pack(fill="both", expand=True, padx=int(16 * s), pady=(0, int(14 * s)))
 
         log_hdr = ctk.CTkFrame(log_wrap, fg_color="transparent")
-        log_hdr.pack(fill="x", padx=12, pady=(8, 0))
-        ctk.CTkLabel(log_hdr, text="activity log",
-                     font=F(9, bold=True), text_color=TEXT_SEC).pack(side="left")
+        log_hdr.pack(fill="x", padx=int(14 * s), pady=(int(10 * s), 0))
+        ctk.CTkLabel(log_hdr, text="ACTIVITY LOG",
+                     font=(FONT_UI, int(8 * s), "bold"), text_color=TEXT_DIM).pack(side="left")
 
         ctk.CTkFrame(log_wrap, fg_color=BORDER, height=1, corner_radius=0
-                     ).pack(fill="x", padx=0, pady=(6, 0))
+                     ).pack(fill="x", padx=0, pady=(int(8 * s), 0))
 
         self._log_box = ctk.CTkTextbox(
             log_wrap, font=(FONT_MONO, int(11 * s)),
@@ -585,37 +623,37 @@ class App(ctk.CTk):
 
         # connection bar
         conn = ctk.CTkFrame(parent, fg_color=BG_CARD,
-                             corner_radius=6, border_width=1, border_color=BORDER_MED)
+                             corner_radius=8, border_width=1, border_color=BORDER)
         conn.pack(fill="x", padx=int(16 * s), pady=(int(12 * s), 4))
-        ctk.CTkLabel(conn, text="ws", font=F(10, bold=True),
-                     text_color=TEXT_SEC).pack(side="left", padx=12, pady=8)
+        ctk.CTkLabel(conn, text="WS", font=(FONT_UI, int(9 * s), "bold"),
+                     text_color=TEXT_DIM).pack(side="left", padx=12, pady=8)
         self._lbl_ws_url = ctk.CTkLabel(
             conn,
             text=self._cloud_url or "not configured — set CLOUD_WS_URL in .env",
-            font=F(10), text_color=TEXT_SEC,
+            font=(FONT_MONO, int(10 * s)), text_color=TEXT_SEC,
         )
         self._lbl_ws_url.pack(side="left")
-        ctk.CTkButton(conn, text="connect", width=int(80 * s), height=int(26 * s),
-                       fg_color=BG_BASE, hover_color="#1a1a1a",
-                       border_width=1, border_color=BORDER_MED,
-                       font=F(10), text_color=TEXT_PRI,
-                       corner_radius=4, command=self._connect_cloud
+        ctk.CTkButton(conn, text="Connect", width=int(80 * s), height=int(26 * s),
+                       fg_color=BG_CARD2, hover_color=BG_CARD2,
+                       border_width=1, border_color=BORDER,
+                       font=(FONT_UI, int(10 * s)), text_color=TEXT_SEC,
+                       corner_radius=6, command=self._connect_cloud
                        ).pack(side="right", padx=8, pady=5)
-        self._lbl_ws_status = ctk.CTkLabel(conn, text="● disconnected",
-                                            font=F(10), text_color=RED)
+        self._lbl_ws_status = ctk.CTkLabel(conn, text="● OFFLINE",
+                                            font=(FONT_UI, int(10 * s), "bold"), text_color=RED)
         self._lbl_ws_status.pack(side="right", padx=8)
 
         # replay bar
         replay_bar = ctk.CTkFrame(parent, fg_color="transparent")
         replay_bar.pack(fill="x", padx=int(16 * s), pady=(0, 8))
-        ctk.CTkButton(replay_bar, text="▸  run 6-month replay  (all profiles)",
-                       font=F(11), height=int(30 * s),
-                       fg_color=BG_CARD, hover_color="#1a1a1a",
-                       border_width=1, border_color=BORDER_MED,
-                       text_color=TEXT_PRI, corner_radius=4,
+        ctk.CTkButton(replay_bar, text="▸  Run 6-month Replay",
+                       font=(FONT_UI, int(11 * s)), height=int(30 * s),
+                       fg_color=BG_CARD, hover_color=BG_CARD2,
+                       border_width=1, border_color=BORDER,
+                       text_color=TEXT_SEC, corner_radius=6,
                        command=self._run_replay).pack(side="left")
         self._lbl_replay = ctk.CTkLabel(replay_bar, text="",
-                                         font=F(10), text_color=TEXT_SEC)
+                                         font=(FONT_UI, int(10 * s)), text_color=TEXT_DIM)
         self._lbl_replay.pack(side="left", padx=12)
 
         # profile cards
@@ -628,7 +666,7 @@ class App(ctk.CTk):
         for ci, name in enumerate(PROFILES_ORDER):
             color = PROFILE_COLORS[name]
             card  = ctk.CTkFrame(cards, fg_color=BG_CARD,
-                                  corner_radius=6, border_width=1, border_color=BORDER_MED)
+                                  corner_radius=8, border_width=1, border_color=BORDER)
             card.grid(row=0, column=ci, padx=5, pady=2, sticky="nsew")
             card.columnconfigure(0, weight=1)
 
@@ -636,21 +674,21 @@ class App(ctk.CTk):
             ctk.CTkFrame(card, fg_color=color, height=2, corner_radius=0
                           ).grid(row=0, column=0, sticky="ew")
 
-            ctk.CTkLabel(card, text=name, font=F(9, bold=True),
-                         text_color=color).grid(row=1, column=0, pady=(8, 0), padx=12, sticky="w")
+            ctk.CTkLabel(card, text=name.upper(), font=(FONT_UI, int(8 * s), "bold"),
+                         text_color=color).grid(row=1, column=0, pady=(10, 0), padx=12, sticky="w")
 
             lbl_ret = ctk.CTkLabel(card, text="—",
-                                    font=(FONT_MONO, int(22 * s), "bold"),
+                                    font=(FONT_MONO, int(26 * s), "bold"),
                                     text_color=TEXT_PRI)
             lbl_ret.grid(row=2, column=0, pady=(2, 0), padx=12, sticky="w")
 
             lbl_trades = ctk.CTkLabel(card, text="0 trades",
-                                       font=F(9), text_color=TEXT_SEC)
+                                       font=(FONT_UI, int(9 * s)), text_color=TEXT_DIM)
             lbl_trades.grid(row=3, column=0, padx=12, sticky="w")
 
             lbl_wr = ctk.CTkLabel(card, text="win rate  —",
-                                   font=F(9), text_color=TEXT_SEC)
-            lbl_wr.grid(row=4, column=0, padx=12, pady=(0, 8), sticky="w")
+                                   font=(FONT_UI, int(9 * s)), text_color=TEXT_DIM)
+            lbl_wr.grid(row=4, column=0, padx=12, pady=(0, 10), sticky="w")
 
             # mini return bar
             bar_bg = ctk.CTkFrame(card, fg_color=BG_BASE, height=3, corner_radius=2)
@@ -665,14 +703,14 @@ class App(ctk.CTk):
 
         # cloud activity log
         log_wrap = ctk.CTkFrame(parent, fg_color=BG_CARD,
-                                corner_radius=6, border_width=1, border_color=BORDER_MED)
+                                corner_radius=8, border_width=1, border_color=BORDER)
         log_wrap.pack(fill="both", expand=True,
                       padx=int(16 * s), pady=(8, int(14 * s)))
-        ctk.CTkLabel(log_wrap, text="cloud activity",
-                     font=(FONT_UI, int(9 * s), "bold"),
-                     text_color=TEXT_SEC).pack(anchor="w", padx=12, pady=(8, 0))
+        ctk.CTkLabel(log_wrap, text="CLOUD ACTIVITY",
+                     font=(FONT_UI, int(8 * s), "bold"),
+                     text_color=TEXT_DIM).pack(anchor="w", padx=int(14 * s), pady=(int(10 * s), 0))
         ctk.CTkFrame(log_wrap, fg_color=BORDER, height=1, corner_radius=0
-                     ).pack(fill="x", pady=(4, 0))
+                     ).pack(fill="x", pady=(int(6 * s), 0))
         self._cloud_log = ctk.CTkTextbox(
             log_wrap, font=(FONT_MONO, int(11 * s)),
             fg_color=BG_BASE, text_color=TEXT_SEC,
@@ -684,14 +722,18 @@ class App(ctk.CTk):
             self._cloud_log._textbox.tag_config(tag, foreground=c)
 
     # ── stat widget ───────────────────────────────────────────────────────────
-    def _stat(self, parent, label, value, col):
+    def _stat(self, parent, label, value, col, val_color=None):
         s = self._scale
-        f = ctk.CTkFrame(parent, fg_color="transparent")
-        f.grid(row=0, column=col, padx=int(20 * s), pady=int(12 * s), sticky="ew")
-        ctk.CTkLabel(f, text=label,
-                     font=(FONT_UI, int(9 * s), "bold"), text_color=TEXT_SEC).pack(anchor="w")
-        lbl = ctk.CTkLabel(f, text=value,
-                            font=(FONT_MONO, int(22 * s), "bold"), text_color=TEXT_PRI)
+        card = ctk.CTkFrame(parent, fg_color=BG_CARD, corner_radius=8,
+                             border_width=1, border_color=BORDER)
+        card.grid(row=0, column=col, padx=int(5 * s), pady=0, sticky="ew")
+        inner = ctk.CTkFrame(card, fg_color="transparent")
+        inner.pack(padx=int(16 * s), pady=int(14 * s), anchor="w", fill="x")
+        ctk.CTkLabel(inner, text=label,
+                     font=(FONT_UI, int(8 * s), "bold"), text_color=TEXT_DIM).pack(anchor="w")
+        lbl = ctk.CTkLabel(inner, text=value,
+                            font=(FONT_MONO, int(24 * s), "bold"),
+                            text_color=val_color if val_color is not None else TEXT_PRI)
         lbl.pack(anchor="w")
         return lbl
 
@@ -827,30 +869,45 @@ class App(ctk.CTk):
                         rsi_col = RED if rsi > 70 else (YELLOW if rsi < 30 else TEXT_SEC)
                         row["rsi"].configure(text=f"{rsi:.1f}", text_color=rsi_col)
                         adx = msg["adx"]
-                        row["adx"].configure(text=f"{adx:.1f}",
-                                             text_color=GREEN if adx > 25 else RED)
+                        adx_col = GREEN if adx > 25 else (YELLOW if adx > 20 else TEXT_DIM)
+                        row["adx"].configure(text=f"{adx:.1f}", text_color=adx_col)
                         sig = msg["signal"]
-                        sig_txt = {1: "buy", -1: "sell", 0: "hold"}.get(sig, "—")
-                        sig_col = {1: GREEN, -1: RED, 0: TEXT_SEC}.get(sig, TEXT_SEC)
+                        sig_txt = {1: "▲ BUY", -1: "▼ SELL", 0: "HOLD"}.get(sig, "—")
+                        sig_col = {1: GREEN, -1: RED, 0: TEXT_DIM}.get(sig, TEXT_DIM)
                         row["signal"].configure(text=sig_txt, text_color=sig_col)
                         in_pos = msg["in_position"]
                         row["status"].configure(
-                            text="● in position" if in_pos else "flat",
-                            text_color=GREEN if in_pos else TEXT_SEC,
+                            text="● LONG" if in_pos else "—",
+                            text_color=GREEN if in_pos else TEXT_DIM,
                         )
                         entry = self._entry_prices.get(sym, 0)
                         if in_pos and entry > 0:
                             pct = (price - entry) / entry * 100
-                            row["upnl"].configure(
-                                text=f"{pct:+.2f}%",
-                                text_color=GREEN if pct >= 0 else RED,
-                            )
+                            qty = self._position_qty.get(sym, 0)
+                            if qty > 0:
+                                usd_pnl = (price - entry) * qty
+                                pnl_col = GREEN if usd_pnl >= 0 else RED
+                                row["upnl"].configure(
+                                    text=f"${usd_pnl:+,.2f}", text_color=pnl_col)
+                            else:
+                                row["upnl"].configure(
+                                    text=f"{pct:+.2f}%",
+                                    text_color=GREEN if pct >= 0 else RED)
                         else:
-                            row["upnl"].configure(text="—", text_color=TEXT_SEC)
+                            row["upnl"].configure(text="—", text_color=TEXT_DIM)
 
                 elif kind == "balance":
-                    self._lbl_cash.configure(text=f"${msg['cash']:,.2f}")
-                    self._lbl_portfolio.configure(text=f"${msg['portfolio']:,.2f}")
+                    cash      = msg["cash"]
+                    portfolio = msg["portfolio"]
+                    if self._portfolio_start is None and portfolio > 0:
+                        self._portfolio_start = portfolio
+                    self._lbl_cash.configure(text=f"${cash:,.2f}")
+                    self._lbl_portfolio.configure(text=f"${portfolio:,.2f}")
+                    if self._portfolio_start and self._portfolio_start > 0:
+                        sess_pnl = portfolio - self._portfolio_start
+                        pnl_col  = GREEN if sess_pnl >= 0 else RED
+                        self._lbl_session_pnl.configure(
+                            text=f"${sess_pnl:+,.2f}", text_color=pnl_col)
 
                 elif kind == "trade":
                     sym    = msg["symbol"]
@@ -859,16 +916,19 @@ class App(ctk.CTk):
                     pnl    = msg.get("pnl", 0)
                     if action == "BUY":
                         self._entry_prices[sym] = price
+                        if msg.get("qty", 0) > 0:
+                            self._position_qty[sym] = msg["qty"]
                     else:
                         self._entry_prices.pop(sym, None)
+                        self._position_qty.pop(sym, None)
                     self._daily_pnl += pnl
                     pnl_col = GREEN if self._daily_pnl >= 0 else RED
                     self._lbl_pnl.configure(
-                        text=f"p&l  ${self._daily_pnl:+,.2f}", text_color=pnl_col)
+                        text=f"${self._daily_pnl:+,.2f}", text_color=pnl_col)
                     row = self._symbol_rows.get(sym)
                     if row:
                         row["last"].configure(
-                            text=f"{action.lower()} ${price:,.2f}",
+                            text=f"{action.upper()} ${price:,.2f}",
                             text_color=GREEN if action == "BUY" else RED,
                         )
                     threading.Thread(
@@ -905,6 +965,7 @@ class App(ctk.CTk):
                 matched = next((s for s in SYMBOLS if s.replace("/", "") == pos.symbol), None)
                 if matched:
                     self._entry_prices[matched] = float(pos.avg_entry_price)
+                    self._position_qty[matched]  = float(pos.qty)
             _q.put({"kind": "log",
                     "msg": f"alpaca synced — cash ${bal['cash']:,.2f}  portfolio ${bal['portfolio_value']:,.2f}",
                     "color": "cyan"})
@@ -1006,20 +1067,22 @@ class App(ctk.CTk):
         def F(size, bold=False):
             return (FONT_UI, int(size * s), "bold") if bold else (FONT_UI, int(size * s))
 
-        ctk.CTkLabel(win, text="preferences",
-                     font=F(14, bold=True), text_color=TEXT_PRI).pack(pady=(20, 4), padx=24, anchor="w")
-        ctk.CTkLabel(win, text="all changes apply immediately — no restart needed",
-                     font=F(10), text_color=TEXT_SEC).pack(padx=24, anchor="w")
-        ctk.CTkFrame(win, fg_color=BORDER_MED, height=1, corner_radius=0
+        ctk.CTkLabel(win, text="PREFERENCES",
+                     font=(FONT_UI, int(14 * s), "bold"), text_color=TEXT_PRI
+                     ).pack(pady=(20, 4), padx=24, anchor="w")
+        ctk.CTkLabel(win, text="All changes apply immediately — no restart needed",
+                     font=(FONT_UI, int(10 * s)), text_color=TEXT_DIM
+                     ).pack(padx=24, anchor="w")
+        ctk.CTkFrame(win, fg_color=BORDER, height=1, corner_radius=0
                      ).pack(fill="x", pady=(12, 4))
 
         def row(label, value):
             f = ctk.CTkFrame(win, fg_color="transparent")
             f.pack(fill="x", padx=24, pady=4)
-            ctk.CTkLabel(f, text=label, anchor="w", font=F(11),
+            ctk.CTkLabel(f, text=label, anchor="w", font=(FONT_UI, int(11 * s)),
                          text_color=TEXT_SEC, width=int(220 * s)).pack(side="left")
             e = ctk.CTkEntry(f, width=int(140 * s), font=(FONT_MONO, int(11 * s)),
-                              fg_color=BG_INPUT, border_color=BORDER_MED,
+                              fg_color=BG_INPUT, border_color=BORDER,
                               text_color=TEXT_PRI, border_width=1)
             e.insert(0, str(value))
             e.pack(side="right")
@@ -1034,7 +1097,7 @@ class App(ctk.CTk):
         e_trail  = row("trailing stop (%)",           int(_live_cfg["trailing_stop"] * 100))
         e_poll   = row("poll interval  (seconds)",    _live_cfg["poll_seconds"])
 
-        ctk.CTkFrame(win, fg_color=BORDER_MED, height=1, corner_radius=0
+        ctk.CTkFrame(win, fg_color=BORDER, height=1, corner_radius=0
                      ).pack(fill="x", pady=(8, 0))
 
         def save():
@@ -1070,10 +1133,10 @@ class App(ctk.CTk):
                 "green")
             win.destroy()
 
-        ctk.CTkButton(win, text="apply", command=save,
-                       font=F(12, bold=True), height=int(34 * s),
-                       fg_color=ACCENT, hover_color="#c4674a",
-                       text_color=BG_BASE, corner_radius=4).pack(pady=16, padx=24, fill="x")
+        ctk.CTkButton(win, text="APPLY CHANGES", command=save,
+                       font=(FONT_UI, int(12 * s), "bold"), height=int(36 * s),
+                       fg_color=ACCENT, hover_color="#0891B2",
+                       text_color=BG_BASE, corner_radius=6).pack(pady=16, padx=24, fill="x")
 
     # ── controls ──────────────────────────────────────────────────────────────
     def _start(self):
@@ -1083,7 +1146,7 @@ class App(ctk.CTk):
         self._stop_event = threading.Event()
         self._bot_thread = threading.Thread(target=bot_loop, args=(self._stop_event,), daemon=True)
         self._bot_thread.start()
-        self._status_dot.configure(text="● running", text_color=GREEN)
+        self._status_dot.configure(text="● LIVE", text_color=GREEN)
         self._btn_start.configure(state="disabled")
         self._btn_stop.configure(state="normal")
 
@@ -1092,7 +1155,7 @@ class App(ctk.CTk):
             return
         self._stop_event.set()
         self._running = False
-        self._status_dot.configure(text="● stopped", text_color=RED)
+        self._status_dot.configure(text="● OFFLINE", text_color=RED)
         self._btn_start.configure(state="normal")
         self._btn_stop.configure(state="disabled")
 
@@ -1100,9 +1163,10 @@ class App(ctk.CTk):
         _live_cfg["kill_switch"] = not _live_cfg["kill_switch"]
         active = _live_cfg["kill_switch"]
         self._btn_kill.configure(
-            text="▸  resume" if active else "⏸  kill switch",
-            fg_color="#2a0505" if active else "#1a0f00",
-            hover_color="#3a0808" if active else "#2a1800",
+            text="▸  Resume" if active else "⏸  Kill Switch",
+            fg_color="#1C0808" if active else "#0F1508",
+            hover_color="#2D0F0F" if active else "#1A2010",
+            text_color=RED if active else YELLOW,
         )
         self._append_log(
             "kill switch ON — new signals paused (open positions held)" if active
@@ -1114,9 +1178,9 @@ class App(ctk.CTk):
         self._on_top = not self._on_top
         self.wm_attributes("-topmost", self._on_top)
         self._btn_ontop.configure(
-            text="pinned" if self._on_top else "pin",
-            fg_color="#0a1a2a" if self._on_top else BG_CARD,
-            text_color=CYAN if self._on_top else TEXT_PRI,
+            text="Pinned" if self._on_top else "Pin",
+            fg_color="#0A1520" if self._on_top else BG_CARD,
+            text_color=CYAN if self._on_top else TEXT_SEC,
         )
 
     # ── system tray (Windows only) ────────────────────────────────────────────
