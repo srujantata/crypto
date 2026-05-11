@@ -282,6 +282,36 @@ class CloudLiveBot:
                 self._emit("bot_log", {"msg": f"{symbol} BUY blocked — 1h bearish", "color": "yellow"})
                 signal = 0
 
+        # ── Event filters: block new BUY entries on macro/news risk ──────────
+        # 1. Earnings blackout — stocks only
+        # Avoid entering within N days of earnings: gap risk is unhedgeable with
+        # technical stops. A -20% overnight gap blows through any trailing stop.
+        if signal == 1 and not state["in_position"]:
+            from exchange import days_to_earnings
+            earnings_blackout = int(os.getenv("EARNINGS_BLACKOUT_DAYS", "2"))
+            dte = days_to_earnings(symbol)
+            if dte <= earnings_blackout:
+                self._emit("bot_log", {
+                    "msg":   f"{symbol} BUY blocked — earnings in {dte}d (blackout {earnings_blackout}d)",
+                    "color": "yellow",
+                })
+                signal = 0
+
+        # 2. VIX panic filter — applies to all symbols
+        # When VIX > threshold, market is in fear mode: technical signals become
+        # unreliable, correlation goes to 1 (everything dumps together), and
+        # volume spikes are noise, not breakouts. Wait for calm to re-enter.
+        if signal == 1 and not state["in_position"]:
+            from exchange import get_vix
+            vix_max = float(os.getenv("VIX_MAX", "30"))
+            vix = get_vix()
+            if vix > vix_max:
+                self._emit("bot_log", {
+                    "msg":   f"{symbol} BUY blocked — VIX={vix:.1f} > {vix_max} (market panic)",
+                    "color": "orange",
+                })
+                signal = 0
+
         # BUY
         if signal == 1 and not state["in_position"]:
             trade_usd = bal["cash"] * risk

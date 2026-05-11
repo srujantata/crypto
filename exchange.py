@@ -69,6 +69,65 @@ def get_client() -> TradingClient:
     return TradingClient(API_KEY, SECRET, paper=paper)
 
 
+# ── Event / macro filters ──────────────────────────────────────────────────────
+
+_earnings_cache: dict = {}   # symbol → (date_checked, days_to_earnings)
+_vix_cache: tuple = (0.0, 0.0)   # (value, timestamp)
+
+def days_to_earnings(symbol: str) -> int:
+    """
+    Return the number of calendar days until the next earnings date for a stock.
+    Returns 999 for crypto (no earnings). Cached per symbol per session.
+    Uses yfinance calendar — free, no API key.
+    """
+    if is_crypto(symbol):
+        return 999
+    now_ts = time.time()
+    cached = _earnings_cache.get(symbol)
+    if cached and now_ts - cached[0] < 3600:   # 1h cache
+        return cached[1]
+    try:
+        info = yf.Ticker(symbol).calendar
+        # calendar is a dict with key 'Earnings Date' → list of datetimes
+        if info is not None and "Earnings Date" in info:
+            dates = info["Earnings Date"]
+            if hasattr(dates, '__iter__'):
+                today = datetime.now(_ET).date()
+                future = [d.date() if hasattr(d, 'date') else d
+                          for d in dates if (d.date() if hasattr(d, 'date') else d) >= today]
+                if future:
+                    days = (min(future) - today).days
+                    _earnings_cache[symbol] = (now_ts, days)
+                    return days
+    except Exception as e:
+        log.debug(f"days_to_earnings {symbol}: {e}")
+    _earnings_cache[symbol] = (now_ts, 999)
+    return 999
+
+
+def get_vix() -> float:
+    """
+    Fetch the current CBOE VIX level via yfinance (^VIX).
+    Cached for 15 minutes. Returns 0.0 on failure (fail-open).
+    VIX > 30 = high fear / market panic — avoid new entries.
+    """
+    global _vix_cache
+    val, ts = _vix_cache
+    if time.time() - ts < 900:   # 15 min cache
+        return val
+    try:
+        raw = yf.download("^VIX", period="1d", interval="1h",
+                          progress=False, auto_adjust=True)
+        if not raw.empty:
+            vix = float(raw["Close"].iloc[-1])
+            _vix_cache = (vix, time.time())
+            log.info(f"VIX={vix:.1f}")
+            return vix
+    except Exception as e:
+        log.debug(f"get_vix: {e}")
+    return val   # return last known value on failure
+
+
 def fetch_ohlcv(limit: int = BACKTEST_LIMIT, symbol: str = "BTC/USD",
                 timeframe: str = TIMEFRAME) -> pd.DataFrame:
     """Fetch OHLCV data with retry on transient network errors."""
