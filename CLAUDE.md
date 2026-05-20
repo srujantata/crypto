@@ -176,7 +176,6 @@ is lost, position WAS sold correctly. The loop detects and logs these but does n
 | `exchange.py` | Alpaca + yfinance connectors |
 | `config.py` | All parameters, symbol lists, per-symbol overrides |
 | `backtest.py` | Historical replay with drawdown tracking |
-| `health_check.py` | Validates cloud + Alpaca connectivity |
 | `cooldown_state.json` | Persisted last_sell_time per symbol (auto-written) |
 | `cloud_trades.csv` | Trade log on Railway (resets on redeploy — mitigated by in-memory deque) |
 
@@ -205,9 +204,6 @@ pip install -r requirements.txt
 # Run the dashboard GUI
 python app.py
 
-# Run health check
-python health_check.py
-
 # Run backtest
 python backtest.py
 ```
@@ -221,38 +217,218 @@ The GUI Settings panel applies all changes immediately via `_live_cfg` dict in `
 - Risk per trade, Timeframe, EMA Fast/Slow, Min ADX, RSI Overbought, Trailing Stop %, Poll interval
 - **Kill Switch** button (⏸) pauses new BUY signal execution without closing open positions
 
-## Current State (as of 2026-05-08)
+## Current State (as of 2026-05-14 ~13:15 UTC)
 
 ### Open Positions
-| Symbol | Entry | Current | P&L% | Armed Exit |
-|--------|-------|---------|------|-----------|
-| AMD | $349.64 | $455.19 | +30.2% | SELL at 9:30 ET (RSI>75) |
-| TSLA | $394.83 | $428.35 | +8.5% | Trailing stop active |
-| LINK/USD | $9.998 | ~$10.37 | +3.7% | Trailing stop active |
-| LTC/USD | $57.41 | ~$58.28 | +1.5% | Trailing stop active |
-| BTC/USD | $80,224 | ~$80,229 | +0.0% | ADX<20 but MACD+ holds |
-| ETH/USD | $2,335 | ~$2,308 | -1.1% | ADX=24.5, watching fade |
-| META | $624.87 | $609.63 | -2.4% | SELL at 9:30 ET (ADX fade-exit) |
+Bot is **FLAT — 0 positions**. Last confirmed by health API iter 248.
 
-### Exits Today (2026-05-08)
-| Symbol | Exit Price | P&L | Trigger |
-|--------|-----------|-----|---------|
-| DOGE/USD | $0.1093 | +1.65% | ADX_FADE_EXIT=20 (new rule) |
-| AVAX/USD | $9.9800 | +3.80% | RSI overbought (77.0) |
-| SOL/USD | $92.49 | ~0% | Externally closed |
+### Market Context (iter 248 summary)
+- Crypto ADX collapsed across the board after May 12 selloff recovery — choppy, no BUY entries
+- BTC MACD surged to +47.4 but ADX=20.9 (just above fade-exit threshold of 20) — bot holding off
+- ETH ADX=18.7 (below fade-exit 20), MACD barely positive — fragile
+- NVDA: ADX=57.3 RISING, MACD=+0.197 (positive), RSI=68.4 — most promising stock setup
+- META: MACD=+2.23, ADX=29.4 — positive signal but RSI=65.6 elevated
+- AVAX RSI=67.1, LTC RSI=65.8 — getting overbought without proper trend structure
 
-### Monitoring Status
-- AI loop: running every 10 minutes since 3:10 PM CDT
-- 30+ iterations completed, 0 hard stops, 0 bad entries
-- 1 code fix auto-applied and deployed: `ADX_FADE_EXIT 18→20` (commit `7cccf20`)
+---
+
+## AI Monitoring Loop — Resume Instructions
+
+**Any LLM (local or cloud) can resume this loop by following these exact steps each iteration:**
+
+### Step 1 — Health check (run in parallel with Step 2)
+```bash
+curl -s -X GET "https://crypto-production-5b12.up.railway.app/health" \
+  -H "Authorization: Bearer REDACTED_SECRET"
+```
+Confirm: `status=ok`, `connected=true`. Note positions{} content.
+
+### Step 2 — Signal scan (run in parallel with Step 1)
+
+Create file `__sig{N}.py` using the template below, then run:
+```
+python __sig{N}.py
+```
+
+**CRITICAL rules:**
+- ASCII only in print() — no emoji (Windows charmap error)
+- Stocks always use 1h (get_symbol_timeframe handles this)
+- SELL reasons: cross_dn | rsi_exh(>75.0) | trend_die(adx<20 AND macd<0) | ema_neg
+- BUY reasons: ModeA | ModeB
+- Freshness: [---]=stale, [NEW]=+1 bar, [+Nb]=multi-bar jump
+
+### Step 3 — Report format
+```
+ITER N — YYYY-MM-DD ~HH:MM UTC
+PORTFOLIO: connected/disconnected | N positions | open/closed
+SIGNALS table: sym | tf | fresh | signal | ADX(delta) | MACD(delta) | RSI(delta)
+PROBLEMS: anything needing attention
+ACTIONS: code fixes or "none"
+```
+
+### Step 4 — Schedule next wakeup
+- Market hours (13:30–20:00 UTC Mon–Fri): 600s (10 min)
+- Overnight / weekend: 1800s (30 min)
+
+---
+
+## Monitoring Loop PREV State (for iter 249)
+
+**Next iter: 249. Last completed: 248 at ~2026-05-14 13:15 UTC.**
+
+```python
+PREV_TS = {
+    "BTC/USD":  "2026-05-14 13:15",
+    "ETH/USD":  "2026-05-14 13:15",
+    "SOL/USD":  "2026-05-14 13:15",
+    "DOGE/USD": "2026-05-14 13:15",
+    "AVAX/USD": "2026-05-14 13:15",
+    "LINK/USD": "2026-05-14 13:15",
+    "LTC/USD":  "2026-05-14 13:15",
+    "COIN":     "2026-05-13 19:30",
+    "NVDA":     "2026-05-13 19:30",
+    "TSLA":     "2026-05-13 19:30",
+    "AMD":      "2026-05-13 19:30",
+    "META":     "2026-05-13 19:30",
+}
+
+PREV = {
+    "BTC/USD":  {"adx": 20.9,  "macd":  47.3723, "rsi": 62.761},
+    "ETH/USD":  {"adx": 18.7,  "macd":   0.4387, "rsi": 52.230},
+    "SOL/USD":  {"adx": 15.9,  "macd":   0.0548, "rsi": 58.014},
+    "DOGE/USD": {"adx": 20.9,  "macd":   0.0003, "rsi": 62.487},
+    "AVAX/USD": {"adx": 24.6,  "macd":   0.0139, "rsi": 67.133},
+    "LINK/USD": {"adx": 13.8,  "macd":   0.0112, "rsi": 62.221},
+    "LTC/USD":  {"adx": 16.7,  "macd":   0.0505, "rsi": 65.817},
+    "COIN":     {"adx": 19.5,  "macd":  -0.9851, "rsi": 47.701},
+    "NVDA":     {"adx": 57.3,  "macd":   0.1970, "rsi": 68.446},
+    "TSLA":     {"adx": 29.1,  "macd":  -0.1882, "rsi": 62.028},
+    "AMD":      {"adx": 34.8,  "macd":  -1.9676, "rsi": 54.731},
+    "META":     {"adx": 29.4,  "macd":   2.2322, "rsi": 65.623},
+}
+```
+
+### Full script template (copy-paste into __sig{N}.py):
+```python
+import sys
+sys.path.insert(0, r'D:\Srujan\Claude\crypto')
+from exchange import fetch_ohlcv, get_symbol_timeframe
+from strategy import generate_signals
+from config import SYMBOL_ADX_MIN
+
+SYMBOLS = ["BTC/USD","ETH/USD","SOL/USD","DOGE/USD","AVAX/USD","LINK/USD","LTC/USD",
+           "COIN","NVDA","TSLA","AMD","META"]
+
+# UPDATE these each iteration with the latest values from the previous scan:
+PREV_TS = {
+    "BTC/USD":  "2026-05-14 13:15",
+    "ETH/USD":  "2026-05-14 13:15",
+    "SOL/USD":  "2026-05-14 13:15",
+    "DOGE/USD": "2026-05-14 13:15",
+    "AVAX/USD": "2026-05-14 13:15",
+    "LINK/USD": "2026-05-14 13:15",
+    "LTC/USD":  "2026-05-14 13:15",
+    "COIN":     "2026-05-13 19:30",
+    "NVDA":     "2026-05-13 19:30",
+    "TSLA":     "2026-05-13 19:30",
+    "AMD":      "2026-05-13 19:30",
+    "META":     "2026-05-13 19:30",
+}
+PREV = {
+    "BTC/USD":  {"adx": 20.9,  "macd":  47.3723, "rsi": 62.761},
+    "ETH/USD":  {"adx": 18.7,  "macd":   0.4387, "rsi": 52.230},
+    "SOL/USD":  {"adx": 15.9,  "macd":   0.0548, "rsi": 58.014},
+    "DOGE/USD": {"adx": 20.9,  "macd":   0.0003, "rsi": 62.487},
+    "AVAX/USD": {"adx": 24.6,  "macd":   0.0139, "rsi": 67.133},
+    "LINK/USD": {"adx": 13.8,  "macd":   0.0112, "rsi": 62.221},
+    "LTC/USD":  {"adx": 16.7,  "macd":   0.0505, "rsi": 65.817},
+    "COIN":     {"adx": 19.5,  "macd":  -0.9851, "rsi": 47.701},
+    "NVDA":     {"adx": 57.3,  "macd":   0.1970, "rsi": 68.446},
+    "TSLA":     {"adx": 29.1,  "macd":  -0.1882, "rsi": 62.028},
+    "AMD":      {"adx": 34.8,  "macd":  -1.9676, "rsi": 54.731},
+    "META":     {"adx": 29.4,  "macd":   2.2322, "rsi": 65.623},
+}
+
+TF_MINUTES = {"1m":1,"5m":5,"15m":15,"30m":30,"1h":60,"4h":240,"1d":1440}
+
+def badge(sig):
+    if sig == 1:  return "BUY  [^]"
+    if sig == -1: return "SELL [v]"
+    return "HOLD [=]"
+
+def d(val, key, sym):
+    prev = PREV.get(sym, {}).get(key)
+    if prev is None: return ""
+    delta = val - prev
+    sign = "+" if delta >= 0 else ""
+    return f" ({sign}{delta:.3f})"
+
+def freshness(ts, prev_ts, tf):
+    if ts == prev_ts:
+        return "[---]"
+    tf_min = TF_MINUTES.get(tf, 15)
+    try:
+        from datetime import datetime
+        fmt = "%Y-%m-%d %H:%M"
+        t1 = datetime.strptime(prev_ts, fmt)
+        t2 = datetime.strptime(ts, fmt)
+        diff_min = int((t2 - t1).total_seconds() / 60)
+        bars = diff_min // tf_min
+        if bars == 1:
+            return "[NEW]"
+        return f"[+{bars}b]"
+    except:
+        return "[NEW]"
+
+def scan(sym):
+    prev_ts = PREV_TS.get(sym, "")
+    tf = get_symbol_timeframe(sym, "15m")
+    df = fetch_ohlcv(limit=150, symbol=sym, timeframe=tf)
+    adx_min = SYMBOL_ADX_MIN.get(sym, 28)
+    df2 = generate_signals(df, adx_min=adx_min)
+    last = df2.iloc[-1]
+    ts = str(df2.index[-1])[:16]
+    fresh = freshness(ts, prev_ts, tf)
+    sig = int(last.get("signal", 0))
+    px = float(last["close"])
+    adx = float(last.get("adx", 0))
+    macd = float(last.get("macd_hist", 0))
+    rsi = float(last.get("rsi", 0))
+    is_new = fresh != "[---]"
+    adx_d  = d(adx,  "adx",  sym) if is_new else ""
+    macd_d = d(macd, "macd", sym) if is_new else ""
+    rsi_d  = d(rsi,  "rsi",  sym) if is_new else ""
+    sell_reasons = []
+    if sig == -1:
+        if last.get("ema_cross_down", False):    sell_reasons.append("cross_dn")
+        if rsi > 75.0:                            sell_reasons.append("rsi_exh(>75.0)")
+        if adx < 20 and macd < 0:                sell_reasons.append("trend_die")
+        if last.get("ema_neg_confirmed", False):  sell_reasons.append("ema_neg")
+    buy_reasons = []
+    if sig == 1:
+        if last.get("mode_a", False): buy_reasons.append("ModeA")
+        if last.get("mode_b", False): buy_reasons.append("ModeB")
+    flag = "!!" if sig != 0 else ""
+    reason_str = ""
+    if sell_reasons: reason_str = " -- " + ",".join(sell_reasons)
+    if buy_reasons:  reason_str = " -- " + ",".join(buy_reasons)
+    print(f"{sym:<10} {tf}  {fresh} ts={ts}  px={px:.3f}")
+    print(f"           {badge(sig)}{flag}  ADX={adx:.1f}{adx_d}  MACD={macd:.4f}{macd_d}  RSI={rsi:.3f}{rsi_d}{reason_str}")
+
+print("=== ITER 249 SIGNAL SCAN ===")
+for sym in SYMBOLS:
+    try:
+        scan(sym)
+    except Exception as e:
+        print(f"{sym:<10} ERROR: {e}")
+print("=== DONE ===")
+```
 
 ## Known Issues / Next Steps
-- **Ghost exit pattern**: SOL/AVAX/DOGE all exiting as ghosts — Alpaca fills orders faster
-  than bot poll cycle. Cosmetic only. Fix would require checking order fill status directly
-  rather than position qty on next poll. Low priority.
-- **ETH ADX watch**: ADX=24.5, MACD negative — fade-exit fires at ADX<20. Monitor overnight.
-- **BTC choppy**: ADX=17.2 below entry threshold but MACD=+16.8 prevents premature sell.
-  Will exit on EMA crossover, RSI>75, or if MACD turns negative.
+- **Ghost exit pattern**: Alpaca fills faster than bot poll — cosmetic, no money lost.
+- **Crypto ADX collapsed**: All crypto ADX <25 after May 12-13 chop. No BUY entries until trend rebuilds.
+- **NVDA watch**: ADX=57.3 rising, MACD positive — most likely next BUY candidate on open.
+- **ETH fragile**: ADX=18.7 below fade-exit threshold — if bot ever enters, exits immediately.
 - **iCUE LINK H170i AIO** not showing in iCUE — LINK Hub USB cable needs connecting to USB 2.0
   header on Z790 HERO motherboard.
 

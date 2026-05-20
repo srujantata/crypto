@@ -123,9 +123,6 @@ cp .env.example .env
 # Run the dashboard
 python app.py
 
-# Run health check
-python health_check.py
-
 # Run backtest
 python backtest.py
 ```
@@ -175,7 +172,6 @@ Railway Variables tab changes to `RISK_PER_TRADE`, `TIMEFRAME`, `ADX_MIN` etc. t
 | `exchange.py` | Alpaca + yfinance connectors |
 | `config.py` | All parameters, symbol lists, per-symbol overrides |
 | `backtest.py` | Historical replay with drawdown tracking |
-| `health_check.py` | Validates cloud + Alpaca connectivity |
 
 ---
 
