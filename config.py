@@ -45,7 +45,10 @@ HARD_STOP_PCT   = 0.05  # hard stop-loss — exit if position drops > 5% from en
 
 # Stock-specific overrides — slower timeframe + higher trend filter
 STOCK_TIMEFRAME = "1h"  # stocks use 1h candles — reduces whipsaw vs 15m
-STOCK_ADX_MIN   = 25    # stocks on 1h are smoother — 25 appropriate (stocks < crypto threshold)
+STOCK_ADX_MIN   = 22    # 1h candles produce lower ADX vs 15m for equivalent trend strength.
+                        # Wilder's 25 was calibrated for daily charts. On 1h, 22 ≈ daily 25.
+                        # Lowered 25→22 (2026-05-20): prevents blocking genuine stock trends
+                        # (e.g. AMD ADX=23.4 with MACD +4.39 and EMA:bull was incorrectly filtered)
 
 # Per-symbol ADX thresholds (research: 15m crypto needs HIGHER ADX than 1h stocks)
 # BTC/ETH: 30 (high-liquidity, trend reliable at 30 on 15m)
@@ -59,11 +62,14 @@ SYMBOL_ADX_MIN = {
     "AVAX/USD": 28,
     "LINK/USD": 28,
     "LTC/USD":  28,
-    "COIN":     25,
-    "NVDA":     25,
-    "TSLA":     25,
-    "AMD":      25,
-    "META":     25,
+    # Stocks on 1h: threshold 22 (lowered from 25 on 2026-05-20)
+    # 1h ADX is structurally lower than 15m ADX for same trend strength.
+    # 22 on 1h ≈ 25 on daily ≈ 28 on 15m in terms of trend significance.
+    "COIN":     22,
+    "NVDA":     22,
+    "TSLA":     22,
+    "AMD":      22,
+    "META":     22,
 }
 
 # Per-symbol ATR trailing stop multiplier

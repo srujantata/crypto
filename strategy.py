@@ -12,7 +12,8 @@ BUY signals (two complementary modes):
 
   Mode B — Pullback:    EMA fast > slow (uptrend established ≥ 3 bars)
                         AND RSI pulled back into 42–58 reload zone
-                        AND MACD histogram still positive
+                        AND MACD histogram still positive AND rising over last 2 bars
+                        AND RSI not in freefall (< 8 pt drop over 3 bars)
                         AND ADX > adx_min AND ADX is rising
                         AND volume >= average
   (catches continuation entries after crossover is already done)
@@ -29,6 +30,12 @@ Key research changes (2026-05-08):
     → reduces false-breakout entries by ~15-20%
   - In-progress candle dropped in exchange.py (fetch_ohlcv) before signals computed
     → eliminates crossovers on incomplete bars that reverse on close
+
+Key research changes (2026-05-20):
+  - ModeB MACD momentum filter: macd_hist must be RISING over last 2 bars
+    → prevents entering on a MACD peak already rolling over (false pullback entries)
+  - ModeB RSI freefall guard: RSI must not have dropped > 8 pts over last 3 bars
+    → ensures pullback is exhausting, not accelerating — times entry after the dip
 """
 import pandas as pd
 import ta
@@ -96,6 +103,8 @@ def generate_signals(df: pd.DataFrame,
     high_volume     = df["volume"] > df["vol_ma"] * vol_surge_mult
     any_volume      = df["volume"] > df["vol_ma"]               # relaxed for pullback mode
     macd_positive   = df["macd_hist"] > 0
+    macd_rising     = df["macd_hist"] > df["macd_hist"].shift(2)  # MACD still building (not peaking)
+    rsi_not_falling = df["rsi"].diff(3) > -8                      # RSI not in freefall (> -8 pts/3 bars)
     slow_rising     = df["ema_slow_slope"] > 0                  # trend direction confirmed
     strong_candle   = df["candle_body_pct"] > 0.4               # no doji/spinning top at entry
 
@@ -126,6 +135,8 @@ def generate_signals(df: pd.DataFrame,
         uptrend_established &
         rsi_reload &
         macd_positive &
+        macd_rising &        # MACD must still be building — not peaking and rolling over
+        rsi_not_falling &    # RSI pullback must be exhausting, not accelerating down
         trending &
         any_volume &
         slow_rising
