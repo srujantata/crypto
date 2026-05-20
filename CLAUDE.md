@@ -424,6 +424,31 @@ for sym in SYMBOLS:
 print("=== DONE ===")
 ```
 
+## Daily Market Researcher
+
+A separate autonomous agent runs once per day at **9:17 AM CDT** to:
+1. **Web-search** trending crypto/stocks for new symbol candidates
+2. **Scan candidates** with `fetch_ohlcv` + `generate_signals` to verify trend quality
+3. **Review parameters** in `config.py` for fitness vs current market conditions
+4. **Make changes** (add/remove symbols, tune thresholds) only when data-backed
+5. **Commit + push** any changes → Railway auto-deploys
+
+### How it runs
+- **Windows Task Scheduler**: `CryptoBot-DailyResearcher` task → runs `daily_researcher.ps1`
+- **Claude Code session**: `.claude/scheduled_tasks.json` registers the cron (re-registers on session start)
+- **Log**: `researcher_log.txt` in the repo root
+
+### Re-register cron in a new Claude session
+```
+CronCreate cron="17 9 * * *" recurring=true durable=true prompt=<see .claude/scheduled_tasks.json>
+```
+
+### Decision criteria (DO NOT change without these)
+- **ADD symbol**: avg volume > $10M/day, Alpaca paper supports it, ADX reaches 25+ in trends
+- **REMOVE symbol**: untradeable for 30+ days OR volume dried up OR Alpaca delisted
+- **TUNE parameter**: concrete observed failure pattern (not speculative)
+- **No change** is the most common correct outcome
+
 ## Known Issues / Next Steps
 - **Ghost exit pattern**: Alpaca fills faster than bot poll — cosmetic, no money lost.
 - **Crypto ADX collapsed**: All crypto ADX <25 after May 12-13 chop. No BUY entries until trend rebuilds.
