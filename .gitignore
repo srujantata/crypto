@@ -1,19 +1,48 @@
-# Never commit secrets or personal data
+# ── Secrets — NEVER commit these ──────────────────────────────────────────────
 .env
+.env.*
+!.env.example
+.webui_secret_key
+cooldown_state.json
+*.pem
+*.key
+*.p12
+*.pfx
+
+# ── Claude Code — machine-local, may contain tokens ───────────────────────────
+.claude/scheduled_tasks.json
+.claude/scheduled_tasks.lock
+.claude/settings.local.json
+.claude/worktrees/
+
+# ── Auto-generated monitoring loop scripts ────────────────────────────────────
+__sig*.py
+__smoketest.py
+__research_scan.py
+
+# ── Build artifacts ────────────────────────────────────────────────────────────
 venv/
 dist/
 build/
 __pycache__/
 *.pyc
 *.pyo
-
-# Personal logs/data
-trades*.csv
-gpu_temps.csv
-
-# PyInstaller
 *.spec
 
-# Windows
+# ── Personal logs / data ───────────────────────────────────────────────────────
+trades*.csv
+cloud_trades.csv
+gpu_temps.csv
+researcher_log.txt
+build_log.txt
+*.log
+
+# ── Project planning docs (local only) ────────────────────────────────────────
+devops-platform-plan.md
+
+# ── Assets not needed in repo ─────────────────────────────────────────────────
+bot.ico
+
+# ── Windows ───────────────────────────────────────────────────────────────────
 Thumbs.db
 desktop.ini

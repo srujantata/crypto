@@ -1,0 +1,27 @@
+repos:
+  # Secret scanning — blocks commits that contain credentials
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.21.2
+    hooks:
+      - id: gitleaks
+
+  # Python security linter
+  - repo: https://github.com/PyCQA/bandit
+    rev: 1.8.3
+    hooks:
+      - id: bandit
+        args: ["-c", "bandit.yaml", "-ll"]
+        exclude: "^(venv|dist|build|__pycache__|__sig.*\\.py|__smoketest\\.py)/"
+
+  # General hygiene — catches private keys, large files, merge conflicts
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: detect-private-key
+      - id: check-added-large-files
+        args: ["--maxkb=500"]
+      - id: check-merge-conflict
+      - id: check-json
+      - id: check-yaml
+      - id: trailing-whitespace
+        exclude: "\\.(md|csv)$"

@@ -1,0 +1,15 @@
+# Bandit security linter configuration
+# Run: bandit -r . -c bandit.yaml -f txt
+
+exclude_dirs:
+  - venv
+  - dist
+  - build
+  - __pycache__
+  - .git
+
+# B101: assert — OK in non-security-critical code
+# B311: random — used for non-crypto purposes only
+skips:
+  - B101
+  - B311

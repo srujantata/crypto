@@ -1,0 +1,39 @@
+# Gitleaks configuration for srujantata/crypto
+# Run: gitleaks detect --source . --verbose
+
+title = "CryptoBot Gitleaks Config"
+
+[extend]
+useDefault = true  # inherit all default rules (AWS, GitHub, generic API key patterns)
+
+# Custom rules for this project's specific secret patterns
+[[rules]]
+id = "alpaca-api-key"
+description = "Alpaca API Key"
+regex = '''PKNOE7P6[A-Z0-9]{16}'''
+tags = ["alpaca", "api-key"]
+
+[[rules]]
+id = "bot-api-secret"
+description = "CryptoBot API Secret"
+regex = '''CryptoBot\d{4}!'''
+tags = ["cryptobot", "secret"]
+
+[[rules]]
+id = "railway-url-with-token"
+description = "Railway URL embedded with Bearer token"
+regex = '''Bearer\s+[A-Za-z0-9!@#$%^&*]{8,}'''
+tags = ["token", "bearer"]
+
+[[rules]]
+id = "webui-secret"
+description = "WebUI secret key"
+regex = '''VucDSx4[A-Za-z0-9]{8,}'''
+tags = ["webui", "secret"]
+
+[allowlist]
+description = "Allowlisted paths that should not be scanned"
+paths = [
+  ".env.example",
+  "MEMORY.md",
+]
