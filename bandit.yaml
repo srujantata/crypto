@@ -7,9 +7,14 @@ exclude_dirs:
   - build
   - __pycache__
   - .git
+  - .claude
 
 # B101: assert — OK in non-security-critical code
+# B104: 0.0.0.0 bind — intentional for Railway cloud deployment
+# B310: urllib.urlopen — URLs come from env vars (trusted), not user input
 # B311: random — used for non-crypto purposes only
 skips:
   - B101
+  - B104
+  - B310
   - B311
